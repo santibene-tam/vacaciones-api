@@ -1,0 +1,32 @@
+import dotenv from 'dotenv';
+import path from 'path';
+
+dotenv.config();
+
+interface Config {
+  nodeEnv: string;
+  port: number;
+  googleClientId: string;
+  googleSheetsId: string;
+  googleSheetsTabName: string;
+  googleServiceAccountKeyPath: string;
+  allowedOrigins: string[];
+  logLevel: string;
+}
+
+const config: Config = {
+  nodeEnv: process.env.NODE_ENV || 'development',
+  port: parseInt(process.env.PORT || '3000', 10),
+  googleClientId: process.env.GOOGLE_CLIENT_ID || '',
+  googleSheetsId: process.env.GOOGLE_SHEETS_ID || '',
+  googleSheetsTabName: process.env.GOOGLE_SHEETS_TAB_NAME || 'Empleados',
+  googleServiceAccountKeyPath:
+    process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH ||
+    path.join(__dirname, '../../service-account-key.json'),
+  allowedOrigins: process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',')
+    : ['http://localhost:3000'],
+  logLevel: process.env.LOG_LEVEL || 'info',
+};
+
+export default config;
