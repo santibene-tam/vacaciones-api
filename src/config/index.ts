@@ -9,6 +9,7 @@ interface Config {
   googleClientId: string;
   googleSheetsId: string;
   googleSheetsTabName: string;
+  googleRequestsTabName: string;
   googleServiceAccountKeyPath: string;
   allowedOrigins: string[];
   logLevel: string;
@@ -20,6 +21,7 @@ const config: Config = {
   googleClientId: process.env.GOOGLE_CLIENT_ID || '',
   googleSheetsId: process.env.GOOGLE_SHEETS_ID || '',
   googleSheetsTabName: process.env.GOOGLE_SHEETS_TAB_NAME || 'Empleados',
+  googleRequestsTabName: process.env.GOOGLE_REQUESTS_TAB_NAME || 'Solicitudes',
   googleServiceAccountKeyPath:
     process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH ||
     path.join(__dirname, '../../service-account-key.json'),

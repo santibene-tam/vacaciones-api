@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import holidaysRoutes from './holidays.routes';
+import requestsRoutes from './requests.routes';
 
 const router = Router();
 
@@ -10,5 +11,6 @@ router.get('/health', (_req, res) => {
 
 // API routes
 router.use('/holidays', holidaysRoutes);
+router.use('/requests', requestsRoutes);
 
 export default router;

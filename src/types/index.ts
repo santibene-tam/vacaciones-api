@@ -30,3 +30,54 @@ export interface AccessControl {
   canViewAllEmployees: boolean;
   canViewEmployee: (targetEmail: string) => boolean;
 }
+
+// Holiday Request Types
+export enum RequestStatus {
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+}
+
+export enum ApprovalStatus {
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+  NOT_REQUIRED = 'NOT_REQUIRED',
+}
+
+export enum ApprovalAction {
+  APPROVE = 'APPROVE',
+  REJECT = 'REJECT',
+}
+
+export interface ApproverInfo {
+  email: string;
+  status: ApprovalStatus;
+  date: string;
+}
+
+export interface HolidayRequest {
+  id: string;
+  employeeEmail: string;
+  employeeName: string;
+  startDate: string; // Format: DD/MM/YYYY
+  endDate: string; // Format: DD/MM/YYYY
+  totalDays: number;
+  status: RequestStatus;
+  currentApprover: string;
+  approver1: ApproverInfo;
+  approver2: ApproverInfo;
+  approver3: ApproverInfo;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateHolidayRequestInput {
+  startDate: string; // Format: DD/MM/YYYY
+  endDate: string; // Format: DD/MM/YYYY
+}
+
+export interface ApprovalActionInput {
+  action: ApprovalAction;
+  comments?: string;
+}
