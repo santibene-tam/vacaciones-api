@@ -6,6 +6,10 @@ dotenv.config();
 interface Config {
   nodeEnv: string;
   port: number;
+  // Slack incoming webhook URL for notifications
+  slackWebhookUrl: string;
+  // Optional Slack bot token for sending DMs via Slack Web API
+  slackBotToken: string;
   googleClientId: string;
   googleSheetsId: string;
   googleSheetsTabName: string;
@@ -18,6 +22,8 @@ interface Config {
 const config: Config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port: parseInt(process.env.PORT || '3000', 10),
+  slackWebhookUrl: process.env.SLACK_WEBHOOK_URL || '',
+  slackBotToken: process.env.SLACK_BOT_TOKEN || '',
   googleClientId: process.env.GOOGLE_CLIENT_ID || '',
   googleSheetsId: process.env.GOOGLE_SHEETS_ID || '',
   googleSheetsTabName: process.env.GOOGLE_SHEETS_TAB_NAME || 'Empleados',

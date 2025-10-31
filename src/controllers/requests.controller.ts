@@ -3,6 +3,7 @@ import { AuthenticatedRequest } from '../middleware/auth';
 import requestsService from '../services/requests.service';
 import googleSheetsService from '../services/googleSheets.service';
 import logger from '../utils/logger';
+import notificationService from '../services/notification.service';
 import { CreateHolidayRequestInput, ApprovalAction } from '../types';
 
 /**
@@ -28,6 +29,13 @@ export async function createRequest(req: AuthenticatedRequest, res: Response): P
     const request = await requestsService.createRequest(userEmail, input);
 
     logger.info({ requestId: request.id, employee: userEmail }, 'Holiday request created via API');
+    // Notify (fire-and-forget) — not blocking the response
+    notificationService
+      .notifyRequestCreated(request)
+      .catch((err) =>
+        logger.error({ err, requestId: request.id }, 'Failed to send create notification')
+      );
+
     res.status(201).json(request);
   } catch (error: any) {
     logger.error({ error, user: req.user?.email }, 'Error creating holiday request');
@@ -73,7 +81,10 @@ export async function getPendingRequests(req: AuthenticatedRequest, res: Respons
 
     const requests = await requestsService.getPendingRequestsForApprover(userEmail);
 
-    logger.info({ approver: userEmail, count: requests.length }, 'Retrieved pending requests for approver');
+    logger.info(
+      { approver: userEmail, count: requests.length },
+      'Retrieved pending requests for approver'
+    );
     res.json(requests);
   } catch (error) {
     logger.error({ error, user: req.user?.email }, 'Error retrieving pending requests');
@@ -143,7 +154,10 @@ export async function getRequestById(req: AuthenticatedRequest, res: Response): 
     logger.info({ requestId: id, user: userEmail }, 'Retrieved request');
     res.json(request);
   } catch (error) {
-    logger.error({ error, user: req.user?.email, requestId: req.params.id }, 'Error retrieving request');
+    logger.error(
+      { error, user: req.user?.email, requestId: req.params.id },
+      'Error retrieving request'
+    );
     res.status(500).json({ error: 'Failed to retrieve request' });
   }
 }
@@ -169,9 +183,17 @@ export async function approveRequest(req: AuthenticatedRequest, res: Response): 
     );
 
     logger.info({ requestId: id, approver: userEmail }, 'Request approved');
+    // Notify employee and next approver (fire-and-forget)
+    notificationService
+      .notifyRequestUpdated(updatedRequest, 'Aprobado', userEmail)
+      .catch((err) => logger.error({ err, requestId: id }, 'Failed to send approval notification'));
+
     res.json(updatedRequest);
   } catch (error: any) {
-    logger.error({ error, user: req.user?.email, requestId: req.params.id }, 'Error approving request');
+    logger.error(
+      { error, user: req.user?.email, requestId: req.params.id },
+      'Error approving request'
+    );
     res.status(400).json({ error: error.message || 'Failed to approve request' });
   }
 }
@@ -197,9 +219,18 @@ export async function rejectRequest(req: AuthenticatedRequest, res: Response): P
     );
 
     logger.info({ requestId: id, approver: userEmail }, 'Request rejected');
+    notificationService
+      .notifyRequestUpdated(updatedRequest, 'Rechazado', userEmail)
+      .catch((err) =>
+        logger.error({ err, requestId: id }, 'Failed to send rejection notification')
+      );
+
     res.json(updatedRequest);
   } catch (error: any) {
-    logger.error({ error, user: req.user?.email, requestId: req.params.id }, 'Error rejecting request');
+    logger.error(
+      { error, user: req.user?.email, requestId: req.params.id },
+      'Error rejecting request'
+    );
     res.status(400).json({ error: error.message || 'Failed to reject request' });
   }
 }
