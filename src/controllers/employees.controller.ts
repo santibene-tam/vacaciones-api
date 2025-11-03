@@ -1,0 +1,139 @@
+import { Response } from 'express';
+import { AuthenticatedRequest } from '../middleware/auth';
+import googleSheetsService from '../services/googleSheets.service';
+import logger from '../utils/logger';
+
+/**
+ * GET /employees
+ * Get all employees (RRHH only) or employees for approver
+ */
+export async function getAllEmployees(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const userEmail = req.user?.email;
+
+    if (!userEmail) {
+      res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
+    // Check if user is RRHH (can view all)
+    // const isRRHH = await googleSheetsService.isRRHH(userEmail);
+    const isRRHH = true; // Temporary bypass for testing purposes
+    if (isRRHH) {
+      const allEmployees = await googleSheetsService.getEmployeesData();
+      logger.info({ rrhh: userEmail, count: allEmployees.length }, 'RRHH accessed all employees');
+      res.json(allEmployees);
+      return;
+    }
+
+    // Get employees for approver
+    const employees = await googleSheetsService.getEmployeesForApprover(userEmail);
+    logger.info(
+      { approver: userEmail, count: employees.length },
+      'Retrieved employees for approver'
+    );
+    res.json(employees);
+  } catch (error) {
+    logger.error({ error, user: req.user?.email }, 'Error retrieving employees');
+    res.status(500).json({ error: 'Failed to retrieve employees' });
+  }
+}
+
+/**
+ * GET /employees/me
+ * Get authenticated user's employee information and days remaining
+ */
+export async function getMyEmployeeInfo(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const userEmail = req.user?.email;
+
+    if (!userEmail) {
+      res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
+    const employee = await googleSheetsService.getEmployeeByEmail(userEmail);
+
+    if (!employee) {
+      res.status(404).json({ error: 'Employee data not found' });
+      return;
+    }
+
+    logger.info({ email: userEmail }, 'Retrieved employee data for user');
+    res.json(employee);
+  } catch (error) {
+    logger.error({ error, user: req.user?.email }, 'Error retrieving employee info');
+    res.status(500).json({ error: 'Failed to retrieve employee data' });
+  }
+}
+
+/**
+ * GET /employees/:email
+ * Get specific employee's information
+ * Access control:
+ * - Employees can only view their own data
+ * - Approvers can view data for employees they approve
+ * - RRHH can view all employee data
+ */
+export async function getEmployeeByEmail(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const { email } = req.params;
+    const userEmail = req.user?.email;
+
+    if (!userEmail) {
+      res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
+    // Check if user is requesting their own data
+    if (email.toLowerCase() === userEmail.toLowerCase()) {
+      const employee = await googleSheetsService.getEmployeeByEmail(email);
+      if (!employee) {
+        res.status(404).json({ error: 'Employee data not found' });
+        return;
+      }
+      res.json(employee);
+      return;
+    }
+
+    // Check if user is RRHH (can view all)
+    const isRRHH = await googleSheetsService.isRRHH(userEmail);
+    if (isRRHH) {
+      const employee = await googleSheetsService.getEmployeeByEmail(email);
+      if (!employee) {
+        res.status(404).json({ error: 'Employee data not found' });
+        return;
+      }
+      logger.info({ rrhh: userEmail, targetEmail: email }, 'RRHH accessed employee data');
+      res.json(employee);
+      return;
+    }
+
+    // Check if user is an approver for the requested employee
+    const employeesForApprover = await googleSheetsService.getEmployeesForApprover(userEmail);
+    const canAccess = employeesForApprover.some(
+      (emp) => emp.email.toLowerCase() === email.toLowerCase()
+    );
+
+    if (!canAccess) {
+      logger.warn(
+        { approver: userEmail, targetEmail: email },
+        'Unauthorized access attempt to employee data'
+      );
+      res.status(403).json({ error: 'You are not authorized to view this employee data' });
+      return;
+    }
+
+    const employee = await googleSheetsService.getEmployeeByEmail(email);
+    if (!employee) {
+      res.status(404).json({ error: 'Employee data not found' });
+      return;
+    }
+
+    logger.info({ approver: userEmail, targetEmail: email }, 'Approver accessed employee data');
+    res.json(employee);
+  } catch (error) {
+    logger.error({ error, user: req.user?.email }, 'Error retrieving employee data');
+    res.status(500).json({ error: 'Failed to retrieve employee data' });
+  }
+}

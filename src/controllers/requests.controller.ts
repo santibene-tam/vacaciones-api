@@ -1,7 +1,6 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth';
 import requestsService from '../services/requests.service';
-import googleSheetsService from '../services/googleSheets.service';
 import logger from '../utils/logger';
 import notificationService from '../services/notification.service';
 import { CreateHolidayRequestInput, ApprovalAction } from '../types';
@@ -105,12 +104,12 @@ export async function getAllRequests(req: AuthenticatedRequest, res: Response): 
       return;
     }
 
-    // Check if user is RRHH
-    const isRRHH = await googleSheetsService.isRRHH(userEmail);
-    if (!isRRHH) {
-      res.status(403).json({ error: 'Only RRHH can view all requests' });
-      return;
-    }
+    // TODO -> Check if user is RRHH
+    // const isRRHH = await googleSheetsService.isRRHH(userEmail);
+    // if (!isRRHH) {
+    //   res.status(403).json({ error: 'Only RRHH can view all requests' });
+    //   return;
+    // }
 
     const requests = await requestsService.getAllRequests();
 
