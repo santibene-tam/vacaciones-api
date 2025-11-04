@@ -3,7 +3,8 @@ import { AuthenticatedRequest } from '../middleware/auth';
 import requestsService from '../services/requests.service';
 import logger from '../utils/logger';
 import notificationService from '../services/notification.service';
-import { CreateHolidayRequestInput, ApprovalAction } from '../types';
+import { CreateHolidayRequestInput, ApprovalAction, RequestStatus } from '../types';
+import { parseDate } from '../utils/dateUtils';
 
 /**
  * POST /requests
@@ -231,5 +232,89 @@ export async function rejectRequest(req: AuthenticatedRequest, res: Response): P
       'Error rejecting request'
     );
     res.status(400).json({ error: error.message || 'Failed to reject request' });
+  }
+}
+
+/**
+ * GET /requests/approved
+ * Get approved holiday requests with optional time filtering
+ * Query params:
+ * - timeMin: Start date filter in ISO 8601 format (e.g., 2025-10-26T03:00:00.000Z)
+ * - timeMax: End date filter in ISO 8601 format (e.g., 2025-12-07T02:59:59.999Z)
+ */
+export async function getApprovedRequests(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const userEmail = req.user?.email;
+
+    if (!userEmail) {
+      res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
+    // Get all requests
+    const allRequests = await requestsService.getAllRequests();
+
+    // Filter only approved requests
+    let approvedRequests = allRequests.filter(
+      (request) => request.status === RequestStatus.APPROVED
+    );
+
+    // Apply time filters if provided
+    const { timeMin, timeMax } = req.query;
+
+    if (timeMin || timeMax) {
+      approvedRequests = approvedRequests.filter((request) => {
+        try {
+          // Parse request dates (DD/MM/YYYY format)
+          const requestStart = parseDate(request.startDate);
+          const requestEnd = parseDate(request.endDate);
+
+          // Filter by timeMin (request must end on or after timeMin)
+          if (timeMin) {
+            const minDate = new Date(timeMin as string);
+            if (isNaN(minDate.getTime())) {
+              logger.warn({ timeMin }, 'Invalid timeMin format');
+              return true; // Skip filtering if invalid
+            }
+            // Compare dates (ignore time component)
+            requestEnd.setHours(23, 59, 59, 999);
+            if (requestEnd < minDate) {
+              return false;
+            }
+          }
+
+          // Filter by timeMax (request must start on or before timeMax)
+          if (timeMax) {
+            const maxDate = new Date(timeMax as string);
+            if (isNaN(maxDate.getTime())) {
+              logger.warn({ timeMax }, 'Invalid timeMax format');
+              return true; // Skip filtering if invalid
+            }
+            // Compare dates (ignore time component)
+            requestStart.setHours(0, 0, 0, 0);
+            if (requestStart > maxDate) {
+              return false;
+            }
+          }
+
+          return true;
+        } catch (error) {
+          logger.warn(
+            { error, requestId: request.id },
+            'Error parsing request dates for filtering'
+          );
+          return false;
+        }
+      });
+    }
+
+    logger.info(
+      { user: userEmail, count: approvedRequests.length, timeMin, timeMax },
+      'Retrieved approved requests'
+    );
+    res.json(approvedRequests);
+  } catch (error) {
+    logger.error({ error, user: req.user?.email }, 'Error retrieving approved requests');
+    res.status(500).json({ error: 'Failed to retrieve approved requests' });
   }
 }

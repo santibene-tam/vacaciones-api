@@ -8,6 +8,7 @@ import {
   getRequestById,
   approveRequest,
   rejectRequest,
+  getApprovedRequests,
 } from '../controllers/requests.controller';
 
 const router = Router();
@@ -23,6 +24,9 @@ router.get('/me', getMyRequests);
 
 // Get pending requests for the current user (as approver)
 router.get('/pending', getPendingRequests);
+
+// Get approved requests with optional time filtering
+router.get('/approved', getApprovedRequests);
 
 // Get all requests (RRHH only) - must be before /:id to avoid conflict
 router.get('/all', getAllRequests);

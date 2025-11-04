@@ -57,7 +57,7 @@ async function getSlackUserIdByEmail(email: string): Promise<string | null> {
   }
 }
 
-async function dmUserByEmail(email: string, text: string) {
+async function dmUserByEmail(email: string, text: string, blocks?: any[]) {
   if (!slackClient) {
     logger.debug('[notification] No slack bot token configured, skipping DM');
     return { ok: false, reason: 'no-bot' };
@@ -72,7 +72,13 @@ async function dmUserByEmail(email: string, text: string) {
     const channel = conv.channel?.id;
     if (!channel) throw new Error('No DM channel opened');
 
-    await slackClient.chat.postMessage({ channel, text });
+    await slackClient.chat.postMessage({
+      channel,
+      text,
+      blocks: blocks || undefined,
+      unfurl_links: false,
+      unfurl_media: false,
+    });
     return { ok: true };
   } catch (err) {
     // If the token cannot be used for chat.postMessage, detect and log specific guidance
@@ -90,38 +96,297 @@ async function dmUserByEmail(email: string, text: string) {
   }
 }
 
-function buildRequestCreatedText(request: HolidayRequest) {
-  return `*Nueva solicitud de vacaciones*\n*ID:* ${request.id}\n*Empleado:* ${request.employeeName} (${request.employeeEmail})\n*Fechas:* ${request.startDate} - ${request.endDate}\n*Días hábiles:* ${request.totalDays}\n*Estado:* ${request.status}\n*Próximo aprobador:* ${request.currentApprover || '—'}`;
+function buildRequestCreatedBlocks(request: HolidayRequest, forApprover: boolean = false) {
+  const detailsUrl = forApprover
+    ? `${config.frontendUrl}/dashboard/approvals`
+    : `${config.frontendUrl}/dashboard`;
+
+  const headerText = forApprover
+    ? '🟡 *Nueva solicitud de vacaciones requiere tu aprobación*'
+    : '✅ *Tu solicitud de vacaciones ha sido creada*';
+
+  const contextText = forApprover
+    ? `Tienes una solicitud de vacaciones pendiente de aprobación de *${request.employeeName}*.`
+    : `Tu solicitud ha sido enviada exitosamente y está siendo revisada por *${request.currentApprover}*.`;
+
+  return [
+    {
+      type: 'header',
+      text: {
+        type: 'plain_text',
+        text: forApprover ? '📋 Solicitud Pendiente de Aprobación' : '📝 Solicitud Creada',
+        emoji: true,
+      },
+    },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: headerText,
+      },
+    },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: contextText,
+      },
+    },
+    {
+      type: 'divider',
+    },
+    {
+      type: 'section',
+      fields: [
+        {
+          type: 'mrkdwn',
+          text: `*Empleado:*\n${request.employeeName}`,
+        },
+        {
+          type: 'mrkdwn',
+          text: `*ID Solicitud:*\n\`${request.id}\``,
+        },
+        {
+          type: 'mrkdwn',
+          text: `*Período:*\n${request.startDate} al ${request.endDate}`,
+        },
+        {
+          type: 'mrkdwn',
+          text: `*Días hábiles:*\n${request.totalDays} ${request.totalDays === 1 ? 'día' : 'días'}`,
+        },
+      ],
+    },
+    {
+      type: 'divider',
+    },
+    {
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          text: {
+            type: 'plain_text',
+            text: forApprover ? '👀 Revisar' : '📄 Ver Detalles',
+            emoji: true,
+          },
+          style: forApprover ? 'primary' : undefined,
+          url: detailsUrl,
+          action_id: 'view_request',
+        },
+      ],
+    },
+    {
+      type: 'context',
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: forApprover
+            ? '💡 Haz clic en el botón para revisar y aprobar/rechazar esta solicitud.'
+            : '⏳ Te notificaremos cuando tu solicitud sea revisada.',
+        },
+      ],
+    },
+  ];
+}
+
+function buildRequestCreatedText(request: HolidayRequest, forApprover: boolean = false) {
+  if (forApprover) {
+    return `🟡 Nueva solicitud de vacaciones de ${request.employeeName} (${request.startDate} - ${request.endDate}, ${request.totalDays} días). Ver: ${config.frontendUrl}/dashboard/approvals`;
+  }
+  return `✅ Tu solicitud de vacaciones ha sido creada (${request.startDate} - ${request.endDate}, ${request.totalDays} días). Estado: Pendiente de aprobación por ${request.currentApprover}. Ver: ${config.frontendUrl}/dashboard`;
+}
+
+function buildRequestUpdatedBlocks(
+  request: HolidayRequest,
+  action: string,
+  performedBy?: string,
+  forApprover: boolean = false
+) {
+  const detailsUrl = forApprover
+    ? `${config.frontendUrl}/dashboard/approvals`
+    : `${config.frontendUrl}/dashboard`;
+
+  // Determine status emoji and color
+  let statusEmoji = '🔄';
+  let statusText = action;
+  let headerEmoji = '📝';
+  let buttonStyle: 'primary' | 'danger' | undefined = undefined;
+
+  if (action === 'Aprobado' && !request.currentApprover) {
+    statusEmoji = '✅';
+    statusText = '¡aprobada completamente!';
+    headerEmoji = '🎉';
+  } else if (action === 'Aprobado' && request.currentApprover) {
+    statusEmoji = '✅';
+    statusText = 'aprobada (Siguiente nivel)';
+    headerEmoji = '👍';
+    buttonStyle = 'primary';
+  } else if (action === 'Rechazado') {
+    statusEmoji = '❌';
+    statusText = 'rechazada';
+    headerEmoji = '🚫';
+    buttonStyle = 'danger';
+  }
+
+  const headerText = forApprover
+    ? `${statusEmoji} *Solicitud requiere tu aprobación*`
+    : `${statusEmoji} *Tu solicitud ha sido ${statusText.toLowerCase()}*`;
+
+  const contextText = forApprover
+    ? `La solicitud de *${request.employeeName}* fue aprobada por ${performedBy || 'un aprobador'} y ahora requiere tu revisión.`
+    : performedBy
+      ? `Tu solicitud fue ${statusText.toLowerCase()} por *${performedBy}*.`
+      : `Tu solicitud ha sido ${statusText.toLowerCase()}.`;
+
+  const blocks: any[] = [
+    {
+      type: 'header',
+      text: {
+        type: 'plain_text',
+        text: `${headerEmoji} Actualización de Solicitud`,
+        emoji: true,
+      },
+    },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: headerText,
+      },
+    },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: contextText,
+      },
+    },
+    {
+      type: 'divider',
+    },
+    {
+      type: 'section',
+      fields: [
+        {
+          type: 'mrkdwn',
+          text: `*Empleado:*\n${request.employeeName}`,
+        },
+        {
+          type: 'mrkdwn',
+          text: `*ID Solicitud:*\n\`${request.id}\``,
+        },
+        {
+          type: 'mrkdwn',
+          text: `*Período:*\n${request.startDate} al ${request.endDate}`,
+        },
+        {
+          type: 'mrkdwn',
+          text: `*Días hábiles:*\n${request.totalDays} ${request.totalDays === 1 ? 'día' : 'días'}`,
+        },
+        {
+          type: 'mrkdwn',
+          text: `*Estado:*\n${statusEmoji} ${statusText}`,
+        },
+        {
+          type: 'mrkdwn',
+          text: performedBy ? `*Acción por:*\n${performedBy}` : ' ',
+        },
+      ],
+    },
+  ];
+
+  // Add next approver info if applicable
+  if (request.currentApprover && !forApprover) {
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `⏳ *Siguiente aprobador:* ${request.currentApprover}`,
+      },
+    });
+  }
+
+  blocks.push({
+    type: 'divider',
+  });
+
+  blocks.push({
+    type: 'actions',
+    elements: [
+      {
+        type: 'button',
+        text: {
+          type: 'plain_text',
+          text: forApprover ? '👀 Revisar Solicitud' : '📄 Ver Detalles',
+          emoji: true,
+        },
+        style: buttonStyle,
+        url: detailsUrl,
+        action_id: 'view_request',
+      },
+    ],
+  });
+
+  // Context message based on status
+  let contextMessage = '📄 Haz clic en el botón para ver los detalles completos.';
+  if (forApprover) {
+    contextMessage = '💡 Haz clic en el botón para revisar y aprobar/rechazar esta solicitud.';
+  } else if (action === 'Rechazado') {
+    contextMessage = '❌ Si tienes dudas, contacta a tu aprobador o RRHH.';
+  } else if (!request.currentApprover) {
+    contextMessage = '🎉 ¡Tu solicitud ha sido aprobada completamente! Disfruta tus vacaciones.';
+  }
+
+  blocks.push({
+    type: 'context',
+    elements: [
+      {
+        type: 'mrkdwn',
+        text: contextMessage,
+      },
+    ],
+  });
+
+  return blocks;
 }
 
 function buildRequestUpdatedText(request: HolidayRequest, action: string, performedBy?: string) {
-  const base = `*Solicitud actualizada*\n*ID:* ${request.id}\n*Empleado:* ${request.employeeName} (${request.employeeEmail})\n*Fechas:* ${request.startDate} - ${request.endDate}\n*Días hábiles:* ${request.totalDays}`;
-  const actionLine = action ? `\n*Acción:* ${action}` : '';
-  const byLine = performedBy ? `\n*Realizado por:* ${performedBy}` : '';
-  const next = request.currentApprover
-    ? `\n*Siguiente aprobador:* ${request.currentApprover}`
-    : '\n*Estado final:* ' + request.status;
+  const detailsUrl = `${config.frontendUrl}/dashboard`;
+  const statusEmoji = action === 'Aprobado' ? '✅' : action === 'Rechazado' ? '❌' : '🔄';
 
-  return `${base}${actionLine}${byLine}${next}`;
+  const base = `${statusEmoji} Solicitud ${action}: ${request.employeeName} (${request.startDate} - ${request.endDate}, ${request.totalDays} días)`;
+  const byLine = performedBy ? ` por ${performedBy}` : '';
+  const next = request.currentApprover
+    ? `. Siguiente aprobador: ${request.currentApprover}`
+    : `. Estado final: ${request.status}`;
+
+  return `${base}${byLine}${next}. Ver: ${detailsUrl}`;
 }
 
 export default {
   async notifyRequestCreated(request: HolidayRequest) {
-    const text = buildRequestCreatedText(request);
-
-    // Try DM to employee
     const results: Array<any> = [];
+
+    // Notify employee (creator) with confirmation message
     try {
-      const dmEmployee = await dmUserByEmail(request.employeeEmail, text);
+      const employeeText = buildRequestCreatedText(request, false);
+      const employeeBlocks = buildRequestCreatedBlocks(request, false);
+      const dmEmployee = await dmUserByEmail(request.employeeEmail, employeeText, employeeBlocks);
       results.push({ to: request.employeeEmail, via: 'dm', result: dmEmployee });
     } catch (err) {
       logger.warn({ err }, 'Error sending DM to creator');
     }
 
-    // Try DM to current approver
+    // Notify current approver with action required message
     if (request.currentApprover) {
       try {
-        const dmApprover = await dmUserByEmail(request.currentApprover, text);
+        const approverText = buildRequestCreatedText(request, true);
+        const approverBlocks = buildRequestCreatedBlocks(request, true);
+        const dmApprover = await dmUserByEmail(
+          request.currentApprover,
+          approverText,
+          approverBlocks
+        );
         results.push({ to: request.currentApprover, via: 'dm', result: dmApprover });
       } catch (err) {
         logger.warn({ err }, 'Error sending DM to current approver');
@@ -131,7 +396,12 @@ export default {
     // If no bot or DMs failed, fallback to posting to webhook channel
     const anyDmOk = results.some((r) => r.result && r.result.ok);
     if (!anyDmOk) {
-      const payload = { text, blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }] };
+      const fallbackText = buildRequestCreatedText(request, false);
+      const fallbackBlocks = buildRequestCreatedBlocks(request, false);
+      const payload = {
+        text: fallbackText,
+        blocks: fallbackBlocks,
+      };
       return postToWebhook(payload);
     }
 
@@ -139,20 +409,28 @@ export default {
   },
 
   async notifyRequestUpdated(request: HolidayRequest, action: string, performedBy?: string) {
-    const text = buildRequestUpdatedText(request, action, performedBy);
-
     const results: Array<any> = [];
+
+    // Notify employee (creator) about the update
     try {
-      const dmEmployee = await dmUserByEmail(request.employeeEmail, text);
+      const employeeText = buildRequestUpdatedText(request, action, performedBy);
+      const employeeBlocks = buildRequestUpdatedBlocks(request, action, performedBy, false);
+      const dmEmployee = await dmUserByEmail(request.employeeEmail, employeeText, employeeBlocks);
       results.push({ to: request.employeeEmail, via: 'dm', result: dmEmployee });
     } catch (err) {
       logger.warn({ err }, 'Error sending DM to creator');
     }
 
-    // If there's a next approver, notify them
+    // If there's a next approver, notify them with action required message
     if (request.currentApprover) {
       try {
-        const dmApprover = await dmUserByEmail(request.currentApprover, text);
+        const approverText = buildRequestUpdatedText(request, action, performedBy);
+        const approverBlocks = buildRequestUpdatedBlocks(request, action, performedBy, true);
+        const dmApprover = await dmUserByEmail(
+          request.currentApprover,
+          approverText,
+          approverBlocks
+        );
         results.push({ to: request.currentApprover, via: 'dm', result: dmApprover });
       } catch (err) {
         logger.warn({ err }, 'Error sending DM to next approver');
@@ -161,7 +439,12 @@ export default {
 
     const anyDmOk = results.some((r) => r.result && r.result.ok);
     if (!anyDmOk) {
-      const payload = { text, blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }] };
+      const fallbackText = buildRequestUpdatedText(request, action, performedBy);
+      const fallbackBlocks = buildRequestUpdatedBlocks(request, action, performedBy, false);
+      const payload = {
+        text: fallbackText,
+        blocks: fallbackBlocks,
+      };
       return postToWebhook(payload);
     }
 

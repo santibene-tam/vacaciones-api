@@ -10,6 +10,8 @@ interface Config {
   slackWebhookUrl: string;
   // Optional Slack bot token for sending DMs via Slack Web API
   slackBotToken: string;
+  // Frontend URL for linking to vacaciones website
+  frontendUrl: string;
   googleClientId: string;
   googleSheetsId: string;
   googleSheetsTabName: string;
@@ -24,6 +26,7 @@ const config: Config = {
   port: parseInt(process.env.PORT || '3000', 10),
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL || '',
   slackBotToken: process.env.SLACK_BOT_TOKEN || '',
+  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
   googleClientId: process.env.GOOGLE_CLIENT_ID || '',
   googleSheetsId: process.env.GOOGLE_SHEETS_ID || '',
   googleSheetsTabName: process.env.GOOGLE_SHEETS_TAB_NAME || 'Empleados',
