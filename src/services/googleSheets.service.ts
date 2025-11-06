@@ -316,6 +316,64 @@ class GoogleSheetsService {
       throw error;
     }
   }
+
+  /**
+   * Delete a holiday request row from the Solicitudes sheet
+   */
+  async deleteRequest(requestId: string): Promise<void> {
+    try {
+      // Find the row index of the request in the data (0-based among data rows)
+      const requests = await this.getAllRequests();
+      const dataRowIndex = requests.findIndex((req) => req.id === requestId);
+
+      if (dataRowIndex === -1) {
+        throw new Error(`Request with ID ${requestId} not found`);
+      }
+
+      // Get sheetId by title
+      const spreadsheet = await this.sheets.spreadsheets.get({
+        spreadsheetId: config.googleSheetsId,
+      });
+
+      const sheet = spreadsheet.data.sheets?.find(
+        (s) => s.properties?.title === config.googleRequestsTabName
+      );
+
+      if (!sheet || sheet.properties?.sheetId === undefined) {
+        throw new Error(`Sheet '${config.googleRequestsTabName}' not found`);
+      }
+
+      const sheetId = sheet.properties.sheetId;
+
+      // Compute absolute row indexes (0-based for entire sheet):
+      // Header is at row 0; data starts at row 1. So add 1 to dataRowIndex
+      const startIndex = 1 + dataRowIndex;
+      const endIndex = startIndex + 1;
+
+      await this.sheets.spreadsheets.batchUpdate({
+        spreadsheetId: config.googleSheetsId,
+        requestBody: {
+          requests: [
+            {
+              deleteDimension: {
+                range: {
+                  sheetId,
+                  dimension: 'ROWS',
+                  startIndex,
+                  endIndex,
+                },
+              },
+            },
+          ],
+        },
+      });
+
+      logger.info({ requestId, rowDeleted: startIndex }, 'Deleted holiday request row');
+    } catch (error) {
+      logger.error({ error, requestId }, 'Error deleting holiday request');
+      throw error;
+    }
+  }
 }
 
 export default new GoogleSheetsService();
