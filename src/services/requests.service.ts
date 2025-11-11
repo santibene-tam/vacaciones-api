@@ -362,6 +362,25 @@ class RequestsService {
 
     return isApprover;
   }
+
+  /**
+   * Delete a request if allowed by status rules
+   * - If status is APPROVED -> throw specific error
+   * - Otherwise -> delete the row from the sheet
+   */
+  async deleteRequestIfAllowed(requestId: string): Promise<void> {
+    const request = await googleSheetsService.getRequestById(requestId);
+
+    if (!request) {
+      throw new Error('Request not found');
+    }
+
+    if (request.status === RequestStatus.APPROVED) {
+      throw new Error('No puede eliminar una solicitud aprobada');
+    }
+
+    await googleSheetsService.deleteRequest(requestId);
+  }
 }
 
 export default new RequestsService();

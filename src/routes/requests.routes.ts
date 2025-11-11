@@ -9,6 +9,7 @@ import {
   approveRequest,
   rejectRequest,
   getApprovedRequests,
+  deleteRequest,
 } from '../controllers/requests.controller';
 
 const router = Router();
@@ -39,5 +40,8 @@ router.put('/:id/approve', approveRequest);
 
 // Reject a request
 router.put('/:id/reject', rejectRequest);
+
+// Delete a request
+router.put('/:id/delete', deleteRequest);
 
 export default router;

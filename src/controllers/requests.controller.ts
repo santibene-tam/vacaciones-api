@@ -58,6 +58,13 @@ export async function getMyRequests(req: AuthenticatedRequest, res: Response): P
 
     const requests = await requestsService.getRequestsByEmployee(userEmail);
 
+    // Ordenar por createdAt descendente (más recientes primero)
+    requests.sort((a: any, b: any) => {
+      const ta = +new Date(a.createdAt) || 0;
+      const tb = +new Date(b.createdAt) || 0;
+      return tb - ta;
+    });
+
     logger.info({ employee: userEmail, count: requests.length }, 'Retrieved employee requests');
     res.json(requests);
   } catch (error) {
@@ -316,5 +323,36 @@ export async function getApprovedRequests(req: AuthenticatedRequest, res: Respon
   } catch (error) {
     logger.error({ error, user: req.user?.email }, 'Error retrieving approved requests');
     res.status(500).json({ error: 'Failed to retrieve approved requests' });
+  }
+}
+
+/**
+ * PUT /requests/:id/delete
+ * Delete a holiday request if allowed
+ */
+export async function deleteRequest(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const userEmail = req.user?.email;
+    const { id } = req.params;
+
+    if (!userEmail) {
+      res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
+    // Minimal rule per requirement: block only if APPROVED
+    await requestsService.deleteRequestIfAllowed(id);
+
+    logger.info({ requestId: id, user: userEmail }, 'Request deleted');
+    //res.status(204).send();
+    res.status(200).json({ message: `Se ha eliminado la solicitud ${id} con exito` });
+  } catch (error: any) {
+    logger.error(
+      { error, user: req.user?.email, requestId: req.params.id },
+      'Error deleting request'
+    );
+    const message = error?.message || 'Failed to delete request';
+    const status = message === 'No puede eliminar una solicitud aprobada' ? 400 : 400;
+    res.status(status).json({ error: message });
   }
 }
