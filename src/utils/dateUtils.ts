@@ -97,7 +97,7 @@ export function isArgentineHoliday(date: Date): boolean {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   const dateKey = `${month}-${day}`;
-  
+
   const holidays = getHolidaysForYear(year);
   return holidays.includes(dateKey);
 }
@@ -112,7 +112,7 @@ export function isBusinessDay(date: Date): boolean {
 /**
  * Calculate the number of business days between two dates (inclusive)
  * Excludes weekends and Argentine national holidays
- * 
+ *
  * @param startDateStr - Start date in DD/MM/YYYY format
  * @param endDateStr - End date in DD/MM/YYYY format
  * @returns Number of business days
@@ -237,7 +237,10 @@ export function getNextPeriod(referenceDate: Date = new Date()): HolidayPeriod {
  * Determine which period a date falls into
  * Returns 'current', 'next', or 'other'
  */
-export function determinePeriod(date: Date, referenceDate: Date = new Date()): 'current' | 'next' | 'other' {
+export function determinePeriod(
+  date: Date,
+  referenceDate: Date = new Date()
+): 'current' | 'next' | 'other' {
   const currentPeriod = getCurrentPeriod(referenceDate);
   const nextPeriod = getNextPeriod(referenceDate);
 
@@ -269,8 +272,6 @@ export function splitDateRangeByPeriod(
 ): PeriodSplit {
   const startDate = parseDate(startDateStr);
   const endDate = parseDate(endDateStr);
-  const currentPeriod = getCurrentPeriod(referenceDate);
-  const nextPeriod = getNextPeriod(referenceDate);
 
   let currentPeriodDays = 0;
   let nextPeriodDays = 0;
@@ -282,7 +283,7 @@ export function splitDateRangeByPeriod(
   while (currentDate <= endDate) {
     if (isBusinessDay(currentDate)) {
       const period = determinePeriod(currentDate, referenceDate);
-      
+
       if (period === 'current') {
         currentPeriodDays++;
       } else if (period === 'next') {
@@ -291,7 +292,7 @@ export function splitDateRangeByPeriod(
         otherPeriodDays++;
       }
     }
-    
+
     // Move to next day
     currentDate.setDate(currentDate.getDate() + 1);
   }

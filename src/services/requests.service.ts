@@ -35,14 +35,16 @@ class RequestsService {
   ): Promise<HolidayRequest> {
     // Validate date format and range
     if (!isValidDateRange(input.startDate, input.endDate)) {
-      throw new Error('Invalid date range. Ensure dates are in DD/MM/YYYY format and end date is after start date');
+      throw new Error(
+        'Invalid date range. Ensure dates are in DD/MM/YYYY format and end date is after start date'
+      );
     }
 
     // Validate dates are not in the past
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const startDate = parseDate(input.startDate);
-    
+
     if (startDate < today) {
       throw new Error('Cannot request holidays in the past');
     }
@@ -87,7 +89,7 @@ class RequestsService {
     // Check for overlapping requests
     const existingRequests = await googleSheetsService.getRequestsByEmployee(employeeEmail);
     const hasOverlap = this.checkDateOverlap(input.startDate, input.endDate, existingRequests);
-    
+
     if (hasOverlap) {
       throw new Error('Request overlaps with an existing request');
     }
@@ -140,7 +142,11 @@ class RequestsService {
   /**
    * Build the approver chain from employee data
    */
-  private buildApproverChain(employee: { approver1?: string; approver2?: string; approver3?: string }): ApproverInfo[] {
+  private buildApproverChain(employee: {
+    approver1?: string;
+    approver2?: string;
+    approver3?: string;
+  }): ApproverInfo[] {
     const approvers: ApproverInfo[] = [];
 
     if (employee.approver1) {
@@ -232,10 +238,7 @@ class RequestsService {
 
       await googleSheetsService.updateRequest(requestId, request);
 
-      logger.info(
-        { requestId, approver: approverEmail, action },
-        'Holiday request rejected'
-      );
+      logger.info({ requestId, approver: approverEmail, action }, 'Holiday request rejected');
 
       return request;
     }
@@ -273,9 +276,9 @@ class RequestsService {
       );
 
       logger.info(
-        { 
-          requestId, 
-          approver: approverEmail, 
+        {
+          requestId,
+          approver: approverEmail,
           totalDays: request.totalDays,
           currentPeriodDays: request.currentPeriodDays,
           nextPeriodDays: request.nextPeriodDays,

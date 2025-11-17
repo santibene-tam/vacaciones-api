@@ -360,33 +360,35 @@ console.log(holidayData);
 
 The API expects the following column structure in the "Empleados" tab:
 
-| Column | Field Name                                 | Type   | Description                                 |
-| ------ | ------------------------------------------ | ------ | ------------------------------------------- |
-| A      | Email                                      | string | Employee email                              |
-| B      | Email raw                                  | string | Raw email (usually same as Email)           |
-| C      | Apellido                                   | string | Last name                                   |
-| D      | Nombre                                     | string | First name                                  |
-| E      | Fecha Ingreso                              | string | Start date                                  |
-| F      | Dias arrastrados año anterior              | number | Carried over days from previous year        |
-| G      | Días Correspondientes                      | number | Days allocated for current period           |
-| H      | Días Tomados                               | number | Days already taken in current period        |
-| I      | Días Restantes                             | number | Days remaining in current period            |
-| J      | Días Correspondientes Siguiente Período    | number | Days allocated for next period              |
-| K      | Días Tomados Siguiente Período             | number | Days already taken in next period           |
-| L      | Días Restantes Siguiente Período           | number | Days remaining in next period               |
-| M      | Aprobador 1                                | string | First approver email                        |
-| N      | Aprobador 2                                | string | Second approver email                       |
-| O      | Aprobador 3                                | string | Third approver (or "RRHH")                  |
+| Column | Field Name                              | Type   | Description                          |
+| ------ | --------------------------------------- | ------ | ------------------------------------ |
+| A      | Email                                   | string | Employee email                       |
+| B      | Email raw                               | string | Raw email (usually same as Email)    |
+| C      | Apellido                                | string | Last name                            |
+| D      | Nombre                                  | string | First name                           |
+| E      | Fecha Ingreso                           | string | Start date                           |
+| F      | Dias arrastrados año anterior           | number | Carried over days from previous year |
+| G      | Días Correspondientes                   | number | Days allocated for current period    |
+| H      | Días Tomados                            | number | Days already taken in current period |
+| I      | Días Restantes                          | number | Days remaining in current period     |
+| J      | Días Correspondientes Siguiente Período | number | Days allocated for next period       |
+| K      | Días Tomados Siguiente Período          | number | Days already taken in next period    |
+| L      | Días Restantes Siguiente Período        | number | Days remaining in next period        |
+| M      | Aprobador 1                             | string | First approver email                 |
+| N      | Aprobador 2                             | string | Second approver email                |
+| O      | Aprobador 3                             | string | Third approver (or "RRHH")           |
 
 **Note**: The first row should contain headers and will be skipped by the API.
 
 ### Holiday Periods
 
 The system operates on **October to September** holiday periods:
+
 - **Current Period**: October 1 - September 30
 - **Next Period**: October 1 (next year) - September 30 (year after)
 
 When creating holiday requests:
+
 - Days are automatically split across periods if the request spans multiple periods
 - The system validates available days in each period separately
 - Updates to days taken are applied to the correct period columns

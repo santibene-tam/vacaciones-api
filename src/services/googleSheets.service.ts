@@ -238,7 +238,10 @@ class GoogleSheetsService {
         },
       });
 
-      logger.info({ requestId: request.id, employee: request.employeeEmail }, 'Created new holiday request');
+      logger.info(
+        { requestId: request.id, employee: request.employeeEmail },
+        'Created new holiday request'
+      );
       return request;
     } catch (error) {
       logger.error({ error, requestId: request.id }, 'Error creating holiday request');
@@ -350,7 +353,10 @@ class GoogleSheetsService {
         'Updated employee days taken for both periods'
       );
     } catch (error) {
-      logger.error({ error, employeeEmail, currentPeriodDays, nextPeriodDays }, 'Error updating employee days');
+      logger.error(
+        { error, employeeEmail, currentPeriodDays, nextPeriodDays },
+        'Error updating employee days'
+      );
       throw error;
     }
   }
@@ -415,4 +421,3 @@ class GoogleSheetsService {
 }
 
 export default new GoogleSheetsService();
-
