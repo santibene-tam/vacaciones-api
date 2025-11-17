@@ -13,6 +13,7 @@ import {
   isValidDateRange,
   formatTimestamp,
   parseDate,
+  splitDateRangeByPeriod,
 } from '../utils/dateUtils';
 
 class RequestsService {
@@ -53,16 +54,33 @@ class RequestsService {
       throw new Error('Request must include at least one business day');
     }
 
+    // Split the request across current and next periods
+    const periodSplit = splitDateRangeByPeriod(input.startDate, input.endDate);
+
+    // Check if request spans periods outside current/next
+    if (periodSplit.otherPeriodDays > 0) {
+      throw new Error(
+        'Request contains days outside the current and next holiday periods. Please adjust your request.'
+      );
+    }
+
     // Get employee data to fetch approvers and validate available days
     const employee = await googleSheetsService.getEmployeeByEmail(employeeEmail);
     if (!employee) {
       throw new Error('Employee not found');
     }
 
-    // Check if employee has enough remaining days
-    if (totalDays > employee.daysRemaining) {
+    // Validate available days for current period
+    if (periodSplit.currentPeriodDays > employee.daysRemaining) {
       throw new Error(
-        `Insufficient holiday days. Requested: ${totalDays}, Available: ${employee.daysRemaining}`
+        `Insufficient holiday days for current period. Requested: ${periodSplit.currentPeriodDays}, Available: ${employee.daysRemaining}`
+      );
+    }
+
+    // Validate available days for next period
+    if (periodSplit.nextPeriodDays > employee.daysRemainingNextPeriod) {
+      throw new Error(
+        `Insufficient holiday days for next period. Requested: ${periodSplit.nextPeriodDays}, Available: ${employee.daysRemainingNextPeriod}`
       );
     }
 
@@ -90,6 +108,8 @@ class RequestsService {
       startDate: input.startDate,
       endDate: input.endDate,
       totalDays,
+      currentPeriodDays: periodSplit.currentPeriodDays,
+      nextPeriodDays: periodSplit.nextPeriodDays,
       status: RequestStatus.PENDING,
       currentApprover: approvers[0].email, // Start with first approver
       approver1: approvers[0] || { email: '', status: ApprovalStatus.NOT_REQUIRED, date: '' },
@@ -106,7 +126,9 @@ class RequestsService {
       {
         requestId: request.id,
         employee: employeeEmail,
-        days: totalDays,
+        totalDays,
+        currentPeriodDays: periodSplit.currentPeriodDays,
+        nextPeriodDays: periodSplit.nextPeriodDays,
         approvers: approvers.map((a) => a.email),
       },
       'Holiday request created'
@@ -118,7 +140,7 @@ class RequestsService {
   /**
    * Build the approver chain from employee data
    */
-  private buildApproverChain(employee: any): ApproverInfo[] {
+  private buildApproverChain(employee: { approver1?: string; approver2?: string; approver3?: string }): ApproverInfo[] {
     const approvers: ApproverInfo[] = [];
 
     if (employee.approver1) {
@@ -243,14 +265,21 @@ class RequestsService {
 
       await googleSheetsService.updateRequest(requestId, request);
 
-      // Update employee's days taken
+      // Update employee's days taken for both periods
       await googleSheetsService.updateEmployeeDaysTaken(
         request.employeeEmail,
-        request.totalDays
+        request.currentPeriodDays,
+        request.nextPeriodDays
       );
 
       logger.info(
-        { requestId, approver: approverEmail, totalDays: request.totalDays },
+        { 
+          requestId, 
+          approver: approverEmail, 
+          totalDays: request.totalDays,
+          currentPeriodDays: request.currentPeriodDays,
+          nextPeriodDays: request.nextPeriodDays,
+        },
         'Request fully approved, employee days updated'
       );
     }

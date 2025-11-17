@@ -21,7 +21,7 @@ class GoogleSheetsService {
    */
   async getEmployeesData(): Promise<EmployeeHoliday[]> {
     try {
-      const range = `${config.googleSheetsTabName}!A2:L`; // Skip header row, columns A-L
+      const range = `${config.googleSheetsTabName}!A2:O`; // Skip header row, columns A-O
 
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: config.googleSheetsId,
@@ -45,9 +45,12 @@ class GoogleSheetsService {
         correspondingDays: parseFloat(row[6]) || 0,
         daysTaken: parseFloat(row[7]) || 0,
         daysRemaining: parseFloat(row[8]) || 0,
-        approver1: row[9] || '',
-        approver2: row[10] || '',
-        approver3: row[11] || '',
+        correspondingDaysNextPeriod: parseFloat(row[9]) || 0,
+        daysTakenNextPeriod: parseFloat(row[10]) || 0,
+        daysRemainingNextPeriod: parseFloat(row[11]) || 0,
+        approver1: row[12] || '',
+        approver2: row[13] || '',
+        approver3: row[14] || '',
       }));
 
       logger.info({ count: employees.length }, 'Fetched employee data from Google Sheets');
@@ -99,7 +102,7 @@ class GoogleSheetsService {
   /**
    * Parse a row from the Solicitudes sheet into a HolidayRequest object
    */
-  private parseRequestRow(row: any[]): HolidayRequest {
+  private parseRequestRow(row: string[]): HolidayRequest {
     return {
       id: row[0] || '',
       employeeEmail: row[1] || '',
@@ -107,32 +110,34 @@ class GoogleSheetsService {
       startDate: row[3] || '',
       endDate: row[4] || '',
       totalDays: parseFloat(row[5]) || 0,
-      status: (row[6] || 'PENDING') as RequestStatus,
-      currentApprover: row[7] || '',
+      currentPeriodDays: parseFloat(row[6]) || 0,
+      nextPeriodDays: parseFloat(row[7]) || 0,
+      status: (row[8] || 'PENDING') as RequestStatus,
+      currentApprover: row[9] || '',
       approver1: {
-        email: row[8] || '',
-        status: (row[9] || 'PENDING') as ApprovalStatus,
-        date: row[10] || '',
+        email: row[10] || '',
+        status: (row[11] || 'PENDING') as ApprovalStatus,
+        date: row[12] || '',
       },
       approver2: {
-        email: row[11] || '',
-        status: (row[12] || 'NOT_REQUIRED') as ApprovalStatus,
-        date: row[13] || '',
+        email: row[13] || '',
+        status: (row[14] || 'NOT_REQUIRED') as ApprovalStatus,
+        date: row[15] || '',
       },
       approver3: {
-        email: row[14] || '',
-        status: (row[15] || 'NOT_REQUIRED') as ApprovalStatus,
-        date: row[16] || '',
+        email: row[16] || '',
+        status: (row[17] || 'NOT_REQUIRED') as ApprovalStatus,
+        date: row[18] || '',
       },
-      createdAt: row[17] || '',
-      updatedAt: row[18] || '',
+      createdAt: row[19] || '',
+      updatedAt: row[20] || '',
     };
   }
 
   /**
    * Convert a HolidayRequest object to a row array for the sheet
    */
-  private requestToRow(request: HolidayRequest): any[] {
+  private requestToRow(request: HolidayRequest): (string | number)[] {
     return [
       request.id,
       request.employeeEmail,
@@ -140,6 +145,8 @@ class GoogleSheetsService {
       request.startDate,
       request.endDate,
       request.totalDays,
+      request.currentPeriodDays,
+      request.nextPeriodDays,
       request.status,
       request.currentApprover,
       request.approver1.email,
@@ -161,7 +168,7 @@ class GoogleSheetsService {
    */
   async getAllRequests(): Promise<HolidayRequest[]> {
     try {
-      const range = `${config.googleRequestsTabName}!A2:S`; // Skip header row
+      const range = `${config.googleRequestsTabName}!A2:U`; // Skip header row, updated to column U for new fields
 
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: config.googleSheetsId,
@@ -219,7 +226,7 @@ class GoogleSheetsService {
    */
   async createRequest(request: HolidayRequest): Promise<HolidayRequest> {
     try {
-      const range = `${config.googleRequestsTabName}!A:S`;
+      const range = `${config.googleRequestsTabName}!A:U`;
       const row = this.requestToRow(request);
 
       await this.sheets.spreadsheets.values.append({
@@ -254,7 +261,7 @@ class GoogleSheetsService {
 
       // Row index + 2 (1 for header, 1 for 0-based to 1-based)
       const rowNumber = rowIndex + 2;
-      const range = `${config.googleRequestsTabName}!A${rowNumber}:S${rowNumber}`;
+      const range = `${config.googleRequestsTabName}!A${rowNumber}:U${rowNumber}`;
       const row = this.requestToRow(updatedRequest);
 
       await this.sheets.spreadsheets.values.update({
@@ -276,8 +283,15 @@ class GoogleSheetsService {
 
   /**
    * Update employee's days taken after a request is approved
+   * @param employeeEmail - Employee's email
+   * @param currentPeriodDays - Days to add to current period
+   * @param nextPeriodDays - Days to add to next period
    */
-  async updateEmployeeDaysTaken(employeeEmail: string, additionalDays: number): Promise<void> {
+  async updateEmployeeDaysTaken(
+    employeeEmail: string,
+    currentPeriodDays: number,
+    nextPeriodDays: number
+  ): Promise<void> {
     try {
       const employees = await this.getEmployeesData();
       const employeeIndex = employees.findIndex(
@@ -289,30 +303,54 @@ class GoogleSheetsService {
       }
 
       const employee = employees[employeeIndex];
-      const newDaysTaken = employee.daysTaken + additionalDays;
-      const newDaysRemaining = employee.daysRemaining - additionalDays;
+
+      // Calculate new values for current period
+      const newDaysTaken = employee.daysTaken + currentPeriodDays;
+      const newDaysRemaining = employee.daysRemaining - currentPeriodDays;
+
+      // Calculate new values for next period
+      const newDaysTakenNextPeriod = employee.daysTakenNextPeriod + nextPeriodDays;
+      const newDaysRemainingNextPeriod = employee.daysRemainingNextPeriod - nextPeriodDays;
 
       // Row number (+ 2 for header and 0-based index)
       const rowNumber = employeeIndex + 2;
-      
-      // Update columns H (daysTaken) and I (daysRemaining)
-      const range = `${config.googleSheetsTabName}!H${rowNumber}:I${rowNumber}`;
 
-      await this.sheets.spreadsheets.values.update({
-        spreadsheetId: config.googleSheetsId,
-        range,
-        valueInputOption: 'RAW',
-        requestBody: {
+      // Update columns H-I (current period: daysTaken, daysRemaining)
+      // and K-L (next period: daysTakenNextPeriod, daysRemainingNextPeriod)
+      // Note: We skip column J (correspondingDaysNextPeriod) as it should not change
+      const updates = [
+        {
+          range: `${config.googleSheetsTabName}!H${rowNumber}:I${rowNumber}`,
           values: [[newDaysTaken, newDaysRemaining]],
+        },
+        {
+          range: `${config.googleSheetsTabName}!K${rowNumber}:L${rowNumber}`,
+          values: [[newDaysTakenNextPeriod, newDaysRemainingNextPeriod]],
+        },
+      ];
+
+      await this.sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: config.googleSheetsId,
+        requestBody: {
+          data: updates,
+          valueInputOption: 'RAW',
         },
       });
 
       logger.info(
-        { employeeEmail, additionalDays, newDaysTaken, newDaysRemaining },
-        'Updated employee days taken'
+        {
+          employeeEmail,
+          currentPeriodDays,
+          nextPeriodDays,
+          newDaysTaken,
+          newDaysRemaining,
+          newDaysTakenNextPeriod,
+          newDaysRemainingNextPeriod,
+        },
+        'Updated employee days taken for both periods'
       );
     } catch (error) {
-      logger.error({ error, employeeEmail, additionalDays }, 'Error updating employee days');
+      logger.error({ error, employeeEmail, currentPeriodDays, nextPeriodDays }, 'Error updating employee days');
       throw error;
     }
   }

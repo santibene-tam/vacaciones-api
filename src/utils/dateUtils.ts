@@ -188,3 +188,117 @@ export function addBusinessDays(startDateStr: string, daysToAdd: number): string
 
   return formatDate(date);
 }
+
+/**
+ * Holiday Period Management
+ * Periods run from October 1st to September 30th of the following year
+ */
+
+export interface HolidayPeriod {
+  startDate: Date;
+  endDate: Date;
+  year: number; // The starting year of the period
+}
+
+/**
+ * Get the current holiday period based on today's date
+ * Period runs from October 1st to September 30th
+ */
+export function getCurrentPeriod(referenceDate: Date = new Date()): HolidayPeriod {
+  const year = referenceDate.getFullYear();
+  const month = referenceDate.getMonth(); // 0-indexed
+
+  // If we're between October and December, the current period started this year
+  // If we're between January and September, the current period started last year
+  const periodStartYear = month >= 9 ? year : year - 1; // 9 = October (0-indexed)
+
+  return {
+    startDate: new Date(periodStartYear, 9, 1), // October 1st
+    endDate: new Date(periodStartYear + 1, 8, 30), // September 30th of next year
+    year: periodStartYear,
+  };
+}
+
+/**
+ * Get the next holiday period
+ */
+export function getNextPeriod(referenceDate: Date = new Date()): HolidayPeriod {
+  const currentPeriod = getCurrentPeriod(referenceDate);
+  const nextYear = currentPeriod.year + 1;
+
+  return {
+    startDate: new Date(nextYear, 9, 1), // October 1st
+    endDate: new Date(nextYear + 1, 8, 30), // September 30th
+    year: nextYear,
+  };
+}
+
+/**
+ * Determine which period a date falls into
+ * Returns 'current', 'next', or 'other'
+ */
+export function determinePeriod(date: Date, referenceDate: Date = new Date()): 'current' | 'next' | 'other' {
+  const currentPeriod = getCurrentPeriod(referenceDate);
+  const nextPeriod = getNextPeriod(referenceDate);
+
+  if (date >= currentPeriod.startDate && date <= currentPeriod.endDate) {
+    return 'current';
+  }
+
+  if (date >= nextPeriod.startDate && date <= nextPeriod.endDate) {
+    return 'next';
+  }
+
+  return 'other';
+}
+
+/**
+ * Split a date range into current and next period segments
+ * Returns the number of business days in each period
+ */
+export interface PeriodSplit {
+  currentPeriodDays: number;
+  nextPeriodDays: number;
+  otherPeriodDays: number;
+}
+
+export function splitDateRangeByPeriod(
+  startDateStr: string,
+  endDateStr: string,
+  referenceDate: Date = new Date()
+): PeriodSplit {
+  const startDate = parseDate(startDateStr);
+  const endDate = parseDate(endDateStr);
+  const currentPeriod = getCurrentPeriod(referenceDate);
+  const nextPeriod = getNextPeriod(referenceDate);
+
+  let currentPeriodDays = 0;
+  let nextPeriodDays = 0;
+  let otherPeriodDays = 0;
+
+  const currentDate = new Date(startDate);
+
+  // Iterate through each day in the range
+  while (currentDate <= endDate) {
+    if (isBusinessDay(currentDate)) {
+      const period = determinePeriod(currentDate, referenceDate);
+      
+      if (period === 'current') {
+        currentPeriodDays++;
+      } else if (period === 'next') {
+        nextPeriodDays++;
+      } else {
+        otherPeriodDays++;
+      }
+    }
+    
+    // Move to next day
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+
+  return {
+    currentPeriodDays,
+    nextPeriodDays,
+    otherPeriodDays,
+  };
+}

@@ -8,6 +8,9 @@ export interface EmployeeHoliday {
   correspondingDays: number;
   daysTaken: number;
   daysRemaining: number;
+  correspondingDaysNextPeriod: number;
+  daysTakenNextPeriod: number;
+  daysRemainingNextPeriod: number;
   approver1: string;
   approver2: string;
   approver3: string;
@@ -63,6 +66,8 @@ export interface HolidayRequest {
   startDate: string; // Format: DD/MM/YYYY
   endDate: string; // Format: DD/MM/YYYY
   totalDays: number;
+  currentPeriodDays: number; // Days taken from current period
+  nextPeriodDays: number; // Days taken from next period
   status: RequestStatus;
   currentApprover: string;
   approver1: ApproverInfo;
