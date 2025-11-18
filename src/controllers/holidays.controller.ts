@@ -49,6 +49,18 @@ export async function getEmployeeHolidays(req: AuthenticatedRequest, res: Respon
       return;
     }
 
+    // API keys have full access to all employee data
+    if (req.user?.isApiKey) {
+      const employee = await googleSheetsService.getEmployeeByEmail(email);
+      if (!employee) {
+        res.status(404).json({ error: 'Employee data not found' });
+        return;
+      }
+      logger.info({ apiKey: true, targetEmail: email }, 'API key accessed employee data');
+      res.json(employee);
+      return;
+    }
+
     // Check if user is requesting their own data
     if (email.toLowerCase() === userEmail.toLowerCase()) {
       const employee = await googleSheetsService.getEmployeeByEmail(email);
@@ -112,6 +124,14 @@ export async function getTeamHolidays(req: AuthenticatedRequest, res: Response):
 
     if (!userEmail) {
       res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
+    // API keys have full access to all employees
+    if (req.user?.isApiKey) {
+      const allEmployees = await googleSheetsService.getEmployeesData();
+      logger.info({ apiKey: true, count: allEmployees.length }, 'API key accessed all employees');
+      res.json(allEmployees);
       return;
     }
 

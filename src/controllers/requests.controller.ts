@@ -9,6 +9,8 @@ import { parseDate } from '../utils/dateUtils';
 /**
  * POST /requests
  * Create a new holiday request
+ * For API keys: can specify employeeEmail in the body to create on behalf of any employee
+ * For regular users: creates request for themselves
  */
 export async function createRequest(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
@@ -26,7 +28,15 @@ export async function createRequest(req: AuthenticatedRequest, res: Response): P
       return;
     }
 
-    const request = await requestsService.createRequest(userEmail, input);
+    // API keys can create requests on behalf of any employee
+    // Regular users can only create requests for themselves
+    let targetEmail = userEmail;
+    if (req.user?.isApiKey && req.body.employeeEmail) {
+      targetEmail = req.body.employeeEmail;
+      logger.info({ apiKey: true, targetEmail }, 'API key creating request on behalf of employee');
+    }
+
+    const request = await requestsService.createRequest(targetEmail, input);
 
     logger.info({ requestId: request.id, employee: userEmail }, 'Holiday request created via API');
     // Notify (fire-and-forget) — not blocking the response
@@ -112,6 +122,14 @@ export async function getAllRequests(req: AuthenticatedRequest, res: Response): 
       return;
     }
 
+    // API keys have full access to all requests
+    if (req.user?.isApiKey) {
+      const requests = await requestsService.getAllRequests();
+      logger.info({ apiKey: true, count: requests.length }, 'API key retrieved all requests');
+      res.json(requests);
+      return;
+    }
+
     // TODO -> Check if user is RRHH
     // const isRRHH = await googleSheetsService.isRRHH(userEmail);
     // if (!isRRHH) {
@@ -150,6 +168,13 @@ export async function getRequestById(req: AuthenticatedRequest, res: Response): 
       return;
     }
 
+    // API keys have full access to all requests
+    if (req.user?.isApiKey) {
+      logger.info({ requestId: id, apiKey: true }, 'API key retrieved request');
+      res.json(request);
+      return;
+    }
+
     // Check if user can view this request
     const canView = await requestsService.canUserViewRequest(userEmail, request);
 
@@ -172,6 +197,8 @@ export async function getRequestById(req: AuthenticatedRequest, res: Response): 
 /**
  * PUT /requests/:id/approve
  * Approve a holiday request
+ * For API keys: can specify approverEmail in the body to approve on behalf of any approver
+ * For regular users: approves as themselves
  */
 export async function approveRequest(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
@@ -183,9 +210,20 @@ export async function approveRequest(req: AuthenticatedRequest, res: Response): 
       return;
     }
 
+    // API keys can approve on behalf of any approver
+    // Regular users can only approve as themselves
+    let approverEmail = userEmail;
+    if (req.user?.isApiKey && req.body.approverEmail) {
+      approverEmail = req.body.approverEmail;
+      logger.info(
+        { apiKey: true, approverEmail, requestId: id },
+        'API key approving request on behalf of approver'
+      );
+    }
+
     const updatedRequest = await requestsService.processApproval(
       id,
-      userEmail,
+      approverEmail,
       ApprovalAction.APPROVE
     );
 
@@ -208,6 +246,8 @@ export async function approveRequest(req: AuthenticatedRequest, res: Response): 
 /**
  * PUT /requests/:id/reject
  * Reject a holiday request
+ * For API keys: can specify approverEmail in the body to reject on behalf of any approver
+ * For regular users: rejects as themselves
  */
 export async function rejectRequest(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
@@ -219,9 +259,20 @@ export async function rejectRequest(req: AuthenticatedRequest, res: Response): P
       return;
     }
 
+    // API keys can reject on behalf of any approver
+    // Regular users can only reject as themselves
+    let approverEmail = userEmail;
+    if (req.user?.isApiKey && req.body.approverEmail) {
+      approverEmail = req.body.approverEmail;
+      logger.info(
+        { apiKey: true, approverEmail, requestId: id },
+        'API key rejecting request on behalf of approver'
+      );
+    }
+
     const updatedRequest = await requestsService.processApproval(
       id,
-      userEmail,
+      approverEmail,
       ApprovalAction.REJECT
     );
 
@@ -257,6 +308,9 @@ export async function getApprovedRequests(req: AuthenticatedRequest, res: Respon
       res.status(401).json({ error: 'User not authenticated' });
       return;
     }
+
+    // API keys have full access - no additional checks needed
+    // (they can see all approved requests without restrictions)
 
     // Get all requests
     const allRequests = await requestsService.getAllRequests();

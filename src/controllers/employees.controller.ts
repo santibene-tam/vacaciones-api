@@ -16,6 +16,14 @@ export async function getAllEmployees(req: AuthenticatedRequest, res: Response):
       return;
     }
 
+    // API keys have full access to all employees
+    if (req.user?.isApiKey) {
+      const allEmployees = await googleSheetsService.getEmployeesData();
+      logger.info({ apiKey: true, count: allEmployees.length }, 'API key accessed all employees');
+      res.json(allEmployees);
+      return;
+    }
+
     // Check if user is RRHH (can view all)
     // const isRRHH = await googleSheetsService.isRRHH(userEmail);
     const isRRHH = true; // Temporary bypass for testing purposes
@@ -82,6 +90,18 @@ export async function getEmployeeByEmail(req: AuthenticatedRequest, res: Respons
 
     if (!userEmail) {
       res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
+    // API keys have full access to all employee data
+    if (req.user?.isApiKey) {
+      const employee = await googleSheetsService.getEmployeeByEmail(email);
+      if (!employee) {
+        res.status(404).json({ error: 'Employee data not found' });
+        return;
+      }
+      logger.info({ apiKey: true, targetEmail: email }, 'API key accessed employee data');
+      res.json(employee);
       return;
     }
 
