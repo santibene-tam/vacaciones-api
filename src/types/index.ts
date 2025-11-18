@@ -21,6 +21,7 @@ export interface UserTokenPayload {
   name?: string;
   picture?: string;
   sub: string;
+  isApiKey?: boolean; // Flag to indicate if authenticated via API key
 }
 
 export enum UserRole {

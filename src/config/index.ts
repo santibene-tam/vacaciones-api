@@ -19,6 +19,8 @@ interface Config {
   googleServiceAccountKeyPath: string;
   allowedOrigins: string[];
   logLevel: string;
+  // API keys for AI agents (comma-separated)
+  apiKeys: string[];
 }
 
 const config: Config = {
@@ -38,6 +40,7 @@ const config: Config = {
     ? process.env.ALLOWED_ORIGINS.split(',')
     : ['http://localhost:3000'],
   logLevel: process.env.LOG_LEVEL || 'info',
+  apiKeys: process.env.API_KEYS ? process.env.API_KEYS.split(',').map((key) => key.trim()) : [],
 };
 
 export default config;
