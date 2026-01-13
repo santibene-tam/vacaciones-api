@@ -2,6 +2,7 @@ import { Router } from 'express';
 import holidaysRoutes from './holidays.routes';
 import requestsRoutes from './requests.routes';
 import employeesRoutes from './employees.routes';
+import feriadosRoutes from './feriados.routes';
 
 const router = Router();
 
@@ -14,5 +15,6 @@ router.get('/health', (_req, res) => {
 router.use('/holidays', holidaysRoutes);
 router.use('/requests', requestsRoutes);
 router.use('/employees', employeesRoutes);
+router.use('/feriados', feriadosRoutes);
 
 export default router;

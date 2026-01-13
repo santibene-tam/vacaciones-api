@@ -418,6 +418,99 @@ class GoogleSheetsService {
       throw error;
     }
   }
+
+  // ==================== FERIADOS METHODS ====================
+
+  /**
+   * Fetch feriados (festive days) for a specific year
+   * Reads from a sheet tab named "Feriados {year}"
+   * Expected format:
+   * - Column A: Date (YYYY-MM-DD)
+   * - Column B: Description
+   */
+  async getFeriadosForYear(year: number): Promise<Array<{ year: number; date: string; description: string }>> {
+    try {
+      const tabName = `Feriados ${year}`;
+      const range = `${tabName}!A2:B`; // Skip header row
+
+      const response = await this.sheets.spreadsheets.values.get({
+        spreadsheetId: config.googleSheetsId,
+        range,
+      });
+
+      const rows = response.data.values;
+
+      if (!rows || rows.length === 0) {
+        logger.warn({ year }, `No feriados found for year ${year}`);
+        return [];
+      }
+
+      const feriados = rows
+        .filter((row) => row[0]) // Filter out empty rows
+        .map((row) => ({
+          year,
+          date: row[0] || '',
+          description: row[1] || '',
+        }));
+
+      logger.info({ year, count: feriados.length }, `Fetched feriados for year ${year}`);
+      return feriados;
+    } catch (error) {
+      // If sheet doesn't exist, log a warning instead of error and return empty array
+      const errorCode = (error as any).code || (error as any).status;
+      const errorMessage = (error as any).message || '';
+
+      // Handle common errors for missing sheet tabs
+      if (
+        errorCode === 400 ||
+        errorCode === 404 ||
+        errorMessage.includes('Unable to parse range') ||
+        errorMessage.includes('not found')
+      ) {
+        logger.warn({ year }, `Feriados sheet for year ${year} not found - skipping`);
+        return [];
+      }
+
+      // For other errors, log but don't throw to prevent server startup failure
+      logger.error({ error, year }, `Error fetching feriados for year ${year} - skipping this year`);
+      return [];
+    }
+  }
+
+  /**
+   * Fetch feriados for multiple years
+   * @param yearRange - Number of years before and after current year to fetch
+   * @returns Array of feriados from all requested years
+   */
+  async getAllFeriados(yearRange: number = 2): Promise<Array<{ year: number; date: string; description: string }>> {
+    const currentYear = new Date().getFullYear();
+    const years: number[] = [];
+
+    // Generate array of years to fetch
+    for (let i = -yearRange; i <= yearRange; i++) {
+      years.push(currentYear + i);
+    }
+
+    // Fetch feriados for all years in parallel
+    // Use Promise.allSettled to continue even if some years fail
+    const feriadosPromises = years.map((year) => this.getFeriadosForYear(year));
+    const results = await Promise.allSettled(feriadosPromises);
+
+    // Extract successful results
+    const allFeriados = results
+      .filter((result) => result.status === 'fulfilled')
+      .flatMap((result) => (result as PromiseFulfilledResult<Array<{ year: number; date: string; description: string }>>).value);
+
+    const successCount = results.filter((r) => r.status === 'fulfilled').length;
+    const failureCount = results.filter((r) => r.status === 'rejected').length;
+
+    logger.info(
+      { yearRange, totalCount: allFeriados.length, years, successCount, failureCount },
+      'Fetched all feriados'
+    );
+
+    return allFeriados;
+  }
 }
 
 export default new GoogleSheetsService();
