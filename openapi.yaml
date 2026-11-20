@@ -411,34 +411,116 @@ paths:
   /api/requests/{id}/delete:
     put:
       tags: [Requests]
-      operationId: deleteRequest
-      summary: Eliminar una solicitud (si no está aprobada)
+      operationId: cancelRequest
+      summary: Cancelar una solicitud (soft-delete)
       description: |
-        Elimina la solicitud salvo que su `status` sea `APPROVED`.
+        Marca la solicitud como `CANCELLED` (no borra la fila). Guarda
+        `cancelledAt` y `cancelledBy` para auditoría. Notifica al empleado,
+        al `currentApprover` si existe, y a todos los approvers que ya
+        habían aprobado.
 
-        ⚠️ **Es un `PUT`, no un `DELETE`** — convención del código actual.
+        Reglas aplicadas en orden:
+        1. Si la solicitud no existe → `404 NOT_FOUND`.
+        2. Si `status != PENDING` → `409 NOT_PENDING`.
+        3. Si `startDate` no es estrictamente posterior a hoy en
+           `America/Argentina/Buenos_Aires` → `409 ALREADY_STARTED`.
+        4. Permisos (ver matriz):
+           - RRHH puede cancelar aunque haya aprobaciones parciales.
+           - El dueño puede cancelar solo si **ningún** approver aprobó aún.
+           - El dueño con alguna aprobación parcial → `403 HAS_PARTIAL_APPROVAL`.
+           - Otro usuario autenticado → `403 NOT_OWNER`.
+
+        ⚠️ Sigue siendo un `PUT`, no un `DELETE`, para no romper el frontend.
+
+        Body:
+        - **JWT humano**: el body puede ir vacío; `cancelledBy` se ignora y se
+          deriva del token.
+        - **API key**: `cancelledBy` es obligatorio (si falta → `400 MISSING_CANCELLED_BY`).
+          Puede ser el email del dueño o de una persona RRHH.
+
+        Shape de error estándar: `{ error, code }` donde `code` es uno de los
+        valores del enum `CancelErrorCode` (estable, independiente del idioma del mensaje).
       parameters:
         - $ref: '#/components/parameters/RequestIdPath'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelRequestInput'
+            examples:
+              jwt:
+                summary: Usuario humano (JWT) — body vacío
+                value: {}
+              apiKeyOwner:
+                summary: API key cancelando como el dueño
+                value:
+                  cancelledBy: ana.perez@tamevolution.com
+              apiKeyRRHH:
+                summary: API key cancelando como RRHH
+                value:
+                  cancelledBy: rrhh@tamevolution.com
       responses:
         '200':
-          description: Solicitud eliminada
+          description: Solicitud cancelada
           content:
             application/json:
               schema:
-                type: object
-                required: [message]
-                properties:
-                  message:
-                    type: string
-                    example: 'Se ha eliminado la solicitud REQ-1731760000-abc con exito'
+                $ref: '#/components/schemas/HolidayRequest'
         '400':
-          description: No se puede eliminar. Mensaje típico `No puede eliminar una solicitud aprobada`.
+          description: Falta `cancelledBy` en el body (solo con API key)
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/CancelError'
+              example:
+                error: Falta cancelledBy en el body
+                code: MISSING_CANCELLED_BY
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: |
+            Sin permisos: `NOT_OWNER` (no es el dueño ni RRHH) o
+            `HAS_PARTIAL_APPROVAL` (dueño con una aprobación parcial).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelError'
+              examples:
+                notOwner:
+                  value:
+                    error: No podés cancelar una solicitud que no es tuya
+                    code: NOT_OWNER
+                hasPartialApproval:
+                  value:
+                    error: Un aprobador ya actuó; contactá a RRHH para cancelar
+                    code: HAS_PARTIAL_APPROVAL
+        '404':
+          description: La solicitud no existe
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelError'
+              example:
+                error: La solicitud no existe
+                code: NOT_FOUND
+        '409':
+          description: |
+            Conflicto de estado: `NOT_PENDING` (ya aprobada/rechazada/cancelada)
+            o `ALREADY_STARTED` (fecha de inicio ya llegó).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelError'
+              examples:
+                notPending:
+                  value:
+                    error: La solicitud no está pendiente, su estado es APPROVED
+                    code: NOT_PENDING
+                alreadyStarted:
+                  value:
+                    error: La solicitud ya comenzó; contactá a RRHH
+                    code: ALREADY_STARTED
 
   /api/employees:
     get:
@@ -633,7 +715,41 @@ components:
 
     RequestStatus:
       type: string
-      enum: [PENDING, APPROVED, REJECTED]
+      enum: [PENDING, APPROVED, REJECTED, CANCELLED]
+
+    CancelErrorCode:
+      type: string
+      enum:
+        - NOT_FOUND
+        - NOT_PENDING
+        - ALREADY_STARTED
+        - NOT_OWNER
+        - HAS_PARTIAL_APPROVAL
+        - MISSING_CANCELLED_BY
+
+    CancelError:
+      type: object
+      required: [error, code]
+      properties:
+        error:
+          type: string
+          description: Mensaje legible (puede traducirse).
+        code:
+          $ref: '#/components/schemas/CancelErrorCode'
+
+    CancelRequestInput:
+      type: object
+      description: |
+        Body opcional para `PUT /api/requests/{id}/delete`.
+        Con JWT, se ignora. Con API key, `cancelledBy` es obligatorio.
+      properties:
+        cancelledBy:
+          type: string
+          format: email
+          description: |
+            **Solo API key.** Email del actor que cancela. Puede ser el dueño
+            de la solicitud o una persona RRHH (en ese caso bypassa el check
+            de aprobaciones parciales).
 
     ApprovalStatus:
       type: string
@@ -818,6 +934,16 @@ components:
           type: string
           format: date-time
           example: '2026-11-19T15:10:00.000Z'
+        cancelledAt:
+          type: string
+          format: date-time
+          description: Timestamp ISO-8601 de la cancelación. Solo presente si `status === CANCELLED`.
+          example: '2026-11-20T16:45:00.000Z'
+        cancelledBy:
+          type: string
+          format: email
+          description: Email del actor que canceló (dueño o RRHH). Solo presente si `status === CANCELLED`.
+          example: ana.perez@tamevolution.com
 
     Feriado:
       type: object
