@@ -7,6 +7,8 @@ import {
   RequestStatus,
   ApprovalStatus,
   ApproverInfo,
+  CancelErrorCode,
+  CancelRequestError,
 } from '../types';
 import {
   calculateBusinessDays,
@@ -14,7 +16,11 @@ import {
   formatTimestamp,
   parseDate,
   splitDateRangeByPeriod,
+  isDateAfterTodayInBuenosAires,
 } from '../utils/dateUtils';
+
+const normalizeEmail = (email: string | undefined | null): string =>
+  (email ?? '').trim().toLowerCase();
 
 class RequestsService {
   /**
@@ -188,8 +194,12 @@ class RequestsService {
     const requestEnd = parseDate(endDateStr);
 
     return existingRequests.some((existing) => {
-      // Only check against pending or approved requests
-      if (existing.status === RequestStatus.REJECTED) {
+      // Only check against pending or approved requests.
+      // Rejected and Cancelled requests do not block a new one.
+      if (
+        existing.status === RequestStatus.REJECTED ||
+        existing.status === RequestStatus.CANCELLED
+      ) {
         return false;
       }
 
@@ -396,22 +406,95 @@ class RequestsService {
   }
 
   /**
-   * Delete a request if allowed by status rules
-   * - If status is APPROVED -> throw specific error
-   * - Otherwise -> delete the row from the sheet
+   * Returns true if any of the three approver slots has already approved.
+   * Used to block the owner from cancelling once someone acted on the chain.
    */
-  async deleteRequestIfAllowed(requestId: string): Promise<void> {
+  hasPartialApproval(request: HolidayRequest): boolean {
+    return (
+      request.approver1.status === ApprovalStatus.APPROVED ||
+      request.approver2.status === ApprovalStatus.APPROVED ||
+      request.approver3.status === ApprovalStatus.APPROVED
+    );
+  }
+
+  /**
+   * Cancel a holiday request (soft-delete).
+   *
+   * Rules (evaluated top-down, first failure wins):
+   *   1. Request must exist -> NOT_FOUND
+   *   2. status must be PENDING -> NOT_PENDING
+   *   3. startDate must be strictly in the future in America/Argentina/Buenos_Aires -> ALREADY_STARTED
+   *   4. Actor is either the owner, RRHH, or neither:
+   *        - RRHH: always allowed (override), even with partial approvals
+   *        - Owner without partial approval: allowed
+   *        - Owner with partial approval -> HAS_PARTIAL_APPROVAL
+   *        - Anyone else -> NOT_OWNER
+   *
+   * Returns the updated request (status CANCELLED, with cancelledAt/cancelledBy set).
+   * Does NOT notify — the controller fires notifications after a successful return.
+   */
+  async cancelRequest(
+    requestId: string,
+    actorEmail: string
+  ): Promise<HolidayRequest> {
     const request = await googleSheetsService.getRequestById(requestId);
 
     if (!request) {
-      throw new Error('Request not found');
+      throw new CancelRequestError(CancelErrorCode.NOT_FOUND, 'La solicitud no existe');
     }
 
-    if (request.status === RequestStatus.APPROVED) {
-      throw new Error('No puede eliminar una solicitud aprobada');
+    if (request.status !== RequestStatus.PENDING) {
+      throw new CancelRequestError(
+        CancelErrorCode.NOT_PENDING,
+        `La solicitud no está pendiente, su estado es ${request.status}`
+      );
     }
 
-    await googleSheetsService.deleteRequest(requestId);
+    if (!isDateAfterTodayInBuenosAires(request.startDate)) {
+      throw new CancelRequestError(
+        CancelErrorCode.ALREADY_STARTED,
+        'La solicitud ya comenzó; contactá a RRHH'
+      );
+    }
+
+    const actor = normalizeEmail(actorEmail);
+    const owner = normalizeEmail(request.employeeEmail);
+    const isOwner = actor === owner;
+    const isRRHH = await googleSheetsService.isRRHH(actorEmail);
+
+    if (!isRRHH) {
+      if (!isOwner) {
+        throw new CancelRequestError(
+          CancelErrorCode.NOT_OWNER,
+          'No podés cancelar una solicitud que no es tuya'
+        );
+      }
+      if (this.hasPartialApproval(request)) {
+        throw new CancelRequestError(
+          CancelErrorCode.HAS_PARTIAL_APPROVAL,
+          'Un aprobador ya actuó; contactá a RRHH para cancelar'
+        );
+      }
+    }
+
+    const now = formatTimestamp(new Date());
+    const cancelled = await googleSheetsService.markRequestAsCancelled(
+      requestId,
+      actorEmail,
+      now
+    );
+
+    logger.info(
+      {
+        requestId,
+        actor: actorEmail,
+        owner: request.employeeEmail,
+        viaRRHH: isRRHH && !isOwner,
+      },
+      'Holiday request cancelled'
+    );
+
+    return cancelled;
   }
 }
 

@@ -3,8 +3,27 @@ import { AuthenticatedRequest } from '../middleware/auth';
 import requestsService from '../services/requests.service';
 import logger from '../utils/logger';
 import notificationService from '../services/notification.service';
-import { CreateHolidayRequestInput, ApprovalAction, RequestStatus } from '../types';
+import {
+  CreateHolidayRequestInput,
+  ApprovalAction,
+  RequestStatus,
+  CancelErrorCode,
+  CancelRequestError,
+} from '../types';
 import { parseDate } from '../utils/dateUtils';
+
+/**
+ * Map a cancellation error code to its HTTP status.
+ * Kept here (not in the service) because the service is transport-agnostic.
+ */
+const CANCEL_CODE_TO_HTTP: Record<CancelErrorCode, number> = {
+  [CancelErrorCode.NOT_FOUND]: 404,
+  [CancelErrorCode.NOT_PENDING]: 409,
+  [CancelErrorCode.ALREADY_STARTED]: 409,
+  [CancelErrorCode.NOT_OWNER]: 403,
+  [CancelErrorCode.HAS_PARTIAL_APPROVAL]: 403,
+  [CancelErrorCode.MISSING_CANCELLED_BY]: 400,
+};
 
 /**
  * POST /requests
@@ -382,31 +401,74 @@ export async function getApprovedRequests(req: AuthenticatedRequest, res: Respon
 
 /**
  * PUT /requests/:id/delete
- * Delete a holiday request if allowed
+ *
+ * Soft-cancel a holiday request. Preserves the row (no delete) and sets
+ * status = CANCELLED with cancelledAt/cancelledBy.
+ *
+ * Resolver del actor:
+ *   - JWT humano: actor = req.user.email. body.cancelledBy se ignora.
+ *   - API key:    actor = body.cancelledBy (obligatorio). Si falta: 400 MISSING_CANCELLED_BY.
+ *
+ * Códigos de error devueltos con shape { error, code }:
+ *   400 MISSING_CANCELLED_BY | 401 (middleware) | 403 NOT_OWNER |
+ *   403 HAS_PARTIAL_APPROVAL | 404 NOT_FOUND    | 409 NOT_PENDING |
+ *   409 ALREADY_STARTED
  */
 export async function deleteRequest(req: AuthenticatedRequest, res: Response): Promise<void> {
-  try {
-    const userEmail = req.user?.email;
-    const { id } = req.params;
+  const { id } = req.params;
+  const userEmail = req.user?.email;
 
-    if (!userEmail) {
-      res.status(401).json({ error: 'User not authenticated' });
+  if (!userEmail) {
+    res.status(401).json({ error: 'User not authenticated' });
+    return;
+  }
+
+  // Resolve the actor: JWT uses the token email; API key uses body.cancelledBy.
+  let actorEmail: string;
+  if (req.user?.isApiKey) {
+    const bodyCancelledBy =
+      typeof req.body?.cancelledBy === 'string' ? req.body.cancelledBy.trim() : '';
+    if (!bodyCancelledBy) {
+      res.status(400).json({
+        error: 'Falta cancelledBy en el body',
+        code: CancelErrorCode.MISSING_CANCELLED_BY,
+      });
+      return;
+    }
+    actorEmail = bodyCancelledBy;
+  } else {
+    actorEmail = userEmail;
+  }
+
+  try {
+    const cancelled = await requestsService.cancelRequest(id, actorEmail);
+
+    // Fire-and-forget: notification failures don't fail the cancel.
+    const cancelledByOwner =
+      cancelled.employeeEmail.toLowerCase() === actorEmail.toLowerCase();
+    notificationService
+      .notifyRequestCancelled(cancelled, actorEmail, cancelledByOwner)
+      .catch((err) =>
+        logger.error({ err, requestId: id }, 'Failed to send cancellation notification')
+      );
+
+    logger.info({ requestId: id, actor: actorEmail }, 'Request cancelled');
+    res.status(200).json(cancelled);
+  } catch (error: any) {
+    if (error instanceof CancelRequestError) {
+      const status = CANCEL_CODE_TO_HTTP[error.code];
+      logger.info(
+        { requestId: id, actor: actorEmail, code: error.code },
+        'Cancellation refused by business rule'
+      );
+      res.status(status).json({ error: error.message, code: error.code });
       return;
     }
 
-    // Minimal rule per requirement: block only if APPROVED
-    await requestsService.deleteRequestIfAllowed(id);
-
-    logger.info({ requestId: id, user: userEmail }, 'Request deleted');
-    //res.status(204).send();
-    res.status(200).json({ message: `Se ha eliminado la solicitud ${id} con exito` });
-  } catch (error: any) {
     logger.error(
-      { error, user: req.user?.email, requestId: req.params.id },
-      'Error deleting request'
+      { error, user: req.user?.email, actor: actorEmail, requestId: id },
+      'Unexpected error cancelling request'
     );
-    const message = error?.message || 'Failed to delete request';
-    const status = message === 'No puede eliminar una solicitud aprobada' ? 400 : 400;
-    res.status(status).json({ error: message });
+    res.status(500).json({ error: 'Failed to cancel request' });
   }
 }

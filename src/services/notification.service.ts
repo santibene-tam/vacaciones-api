@@ -1,7 +1,7 @@
 import axios from 'axios';
 import logger from '../utils/logger';
 import config from '../config';
-import { HolidayRequest } from '../types';
+import { HolidayRequest, ApprovalStatus } from '../types';
 import { WebClient } from '@slack/web-api';
 
 // Slack WebClient (optional)
@@ -363,6 +363,105 @@ function buildRequestUpdatedText(request: HolidayRequest, action: string, perfor
   return `${base}${byLine}${next}. Ver: ${detailsUrl}`;
 }
 
+function buildRequestCancelledBlocks(
+  request: HolidayRequest,
+  cancelledByEmail: string,
+  audience: 'owner-self' | 'owner-by-rrhh' | 'approver-pending' | 'approver-approved'
+) {
+  const detailsUrl = `${config.frontendUrl}/dashboard`;
+
+  let headerEmoji = '🗑️';
+  let headerText = '*Solicitud cancelada*';
+  let contextText = '';
+
+  switch (audience) {
+    case 'owner-self':
+      headerEmoji = '✅';
+      headerText = '*Cancelaste tu solicitud de vacaciones*';
+      contextText = `Tu solicitud del *${request.startDate}* al *${request.endDate}* fue cancelada.`;
+      break;
+    case 'owner-by-rrhh':
+      headerEmoji = '⚠️';
+      headerText = '*RRHH canceló tu solicitud de vacaciones*';
+      contextText = `Tu solicitud del *${request.startDate}* al *${request.endDate}* fue cancelada por *${cancelledByEmail}*. Si tenés dudas, contactá a RRHH.`;
+      break;
+    case 'approver-pending':
+      headerEmoji = '🗑️';
+      headerText = '*Solicitud cancelada*';
+      contextText = `La solicitud de *${request.employeeName}* fue cancelada. No tenés que hacer nada.`;
+      break;
+    case 'approver-approved':
+      headerEmoji = '🗑️';
+      headerText = '*Una solicitud que aprobaste fue cancelada*';
+      contextText = `La solicitud de *${request.employeeName}* que ya habías aprobado fue cancelada por *${cancelledByEmail}*.`;
+      break;
+  }
+
+  return [
+    {
+      type: 'header',
+      text: {
+        type: 'plain_text',
+        text: `${headerEmoji} Solicitud Cancelada`,
+        emoji: true,
+      },
+    },
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: headerText },
+    },
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: contextText },
+    },
+    { type: 'divider' },
+    {
+      type: 'section',
+      fields: [
+        { type: 'mrkdwn', text: `*Empleado:*\n${request.employeeName}` },
+        { type: 'mrkdwn', text: `*ID Solicitud:*\n\`${request.id}\`` },
+        { type: 'mrkdwn', text: `*Período:*\n${request.startDate} al ${request.endDate}` },
+        {
+          type: 'mrkdwn',
+          text: `*Días hábiles:*\n${request.totalDays} ${request.totalDays === 1 ? 'día' : 'días'}`,
+        },
+      ],
+    },
+    { type: 'divider' },
+    {
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: '📄 Ver Detalles', emoji: true },
+          url: detailsUrl,
+          action_id: 'view_request',
+        },
+      ],
+    },
+  ];
+}
+
+function buildRequestCancelledText(
+  request: HolidayRequest,
+  cancelledByEmail: string,
+  audience: 'owner-self' | 'owner-by-rrhh' | 'approver-pending' | 'approver-approved'
+): string {
+  const url = `${config.frontendUrl}/dashboard`;
+  const period = `${request.startDate} - ${request.endDate}`;
+
+  switch (audience) {
+    case 'owner-self':
+      return `✅ Cancelaste tu solicitud de vacaciones (${period}). Ver: ${url}`;
+    case 'owner-by-rrhh':
+      return `⚠️ RRHH (${cancelledByEmail}) canceló tu solicitud de vacaciones (${period}). Ver: ${url}`;
+    case 'approver-pending':
+      return `🗑️ La solicitud de ${request.employeeName} (${period}) fue cancelada. No tenés que hacer nada.`;
+    case 'approver-approved':
+      return `🗑️ La solicitud de ${request.employeeName} (${period}) que ya habías aprobado fue cancelada por ${cancelledByEmail}.`;
+  }
+}
+
 export default {
   async notifyRequestCreated(request: HolidayRequest) {
     const results: Array<any> = [];
@@ -446,6 +545,95 @@ export default {
         blocks: fallbackBlocks,
       };
       return postToWebhook(payload);
+    }
+
+    return { ok: true, details: results };
+  },
+
+  /**
+   * Notify all parties of a cancellation (soft-delete).
+   * - Employee: different copy depending on whether they cancelled themselves or RRHH did.
+   * - currentApprover (if any): neutral "nothing to do".
+   * - Any approver with status APPROVED: "a request you had approved was cancelled".
+   * Fallback to webhook if every DM fails, matching the other notifications.
+   */
+  async notifyRequestCancelled(
+    request: HolidayRequest,
+    cancelledByEmail: string,
+    cancelledByOwner: boolean
+  ) {
+    const results: Array<any> = [];
+
+    // Employee
+    try {
+      const audience: 'owner-self' | 'owner-by-rrhh' = cancelledByOwner
+        ? 'owner-self'
+        : 'owner-by-rrhh';
+      const text = buildRequestCancelledText(request, cancelledByEmail, audience);
+      const blocks = buildRequestCancelledBlocks(request, cancelledByEmail, audience);
+      const dmEmployee = await dmUserByEmail(request.employeeEmail, text, blocks);
+      results.push({ to: request.employeeEmail, via: 'dm', result: dmEmployee });
+    } catch (err) {
+      logger.warn({ err }, 'Error sending cancellation DM to employee');
+    }
+
+    // Previously-approved approvers (if any). Deduplicated against currentApprover below.
+    const approvedApprovers = [request.approver1, request.approver2, request.approver3].filter(
+      (a) => a.email && a.status === ApprovalStatus.APPROVED
+    );
+
+    for (const approver of approvedApprovers) {
+      try {
+        const text = buildRequestCancelledText(request, cancelledByEmail, 'approver-approved');
+        const blocks = buildRequestCancelledBlocks(
+          request,
+          cancelledByEmail,
+          'approver-approved'
+        );
+        const dm = await dmUserByEmail(approver.email, text, blocks);
+        results.push({ to: approver.email, via: 'dm', result: dm });
+      } catch (err) {
+        logger.warn({ err, approver: approver.email }, 'Error sending cancellation DM to approver');
+      }
+    }
+
+    // currentApprover (the one who hadn't acted yet). Skip if already notified via approvedApprovers.
+    if (
+      request.currentApprover &&
+      !approvedApprovers.some(
+        (a) => a.email.toLowerCase() === request.currentApprover.toLowerCase()
+      )
+    ) {
+      try {
+        const text = buildRequestCancelledText(request, cancelledByEmail, 'approver-pending');
+        const blocks = buildRequestCancelledBlocks(
+          request,
+          cancelledByEmail,
+          'approver-pending'
+        );
+        const dm = await dmUserByEmail(request.currentApprover, text, blocks);
+        results.push({ to: request.currentApprover, via: 'dm', result: dm });
+      } catch (err) {
+        logger.warn(
+          { err, approver: request.currentApprover },
+          'Error sending cancellation DM to current approver'
+        );
+      }
+    }
+
+    const anyDmOk = results.some((r) => r.result && r.result.ok);
+    if (!anyDmOk) {
+      const fallbackText = buildRequestCancelledText(
+        request,
+        cancelledByEmail,
+        cancelledByOwner ? 'owner-self' : 'owner-by-rrhh'
+      );
+      const fallbackBlocks = buildRequestCancelledBlocks(
+        request,
+        cancelledByEmail,
+        cancelledByOwner ? 'owner-self' : 'owner-by-rrhh'
+      );
+      return postToWebhook({ text: fallbackText, blocks: fallbackBlocks });
     }
 
     return { ok: true, details: results };

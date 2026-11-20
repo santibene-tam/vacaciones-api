@@ -131,6 +131,8 @@ class GoogleSheetsService {
       },
       createdAt: row[19] || '',
       updatedAt: row[20] || '',
+      cancelledAt: row[21] || undefined,
+      cancelledBy: row[22] || undefined,
     };
   }
 
@@ -160,6 +162,8 @@ class GoogleSheetsService {
       request.approver3.date,
       request.createdAt,
       request.updatedAt,
+      request.cancelledAt || '',
+      request.cancelledBy || '',
     ];
   }
 
@@ -168,7 +172,7 @@ class GoogleSheetsService {
    */
   async getAllRequests(): Promise<HolidayRequest[]> {
     try {
-      const range = `${config.googleRequestsTabName}!A2:U`; // Skip header row, updated to column U for new fields
+      const range = `${config.googleRequestsTabName}!A2:W`; // Skip header row, updated to column U for new fields
 
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: config.googleSheetsId,
@@ -226,7 +230,7 @@ class GoogleSheetsService {
    */
   async createRequest(request: HolidayRequest): Promise<HolidayRequest> {
     try {
-      const range = `${config.googleRequestsTabName}!A:U`;
+      const range = `${config.googleRequestsTabName}!A:W`;
       const row = this.requestToRow(request);
 
       await this.sheets.spreadsheets.values.append({
@@ -264,7 +268,7 @@ class GoogleSheetsService {
 
       // Row index + 2 (1 for header, 1 for 0-based to 1-based)
       const rowNumber = rowIndex + 2;
-      const range = `${config.googleRequestsTabName}!A${rowNumber}:U${rowNumber}`;
+      const range = `${config.googleRequestsTabName}!A${rowNumber}:W${rowNumber}`;
       const row = this.requestToRow(updatedRequest);
 
       await this.sheets.spreadsheets.values.update({
@@ -362,61 +366,29 @@ class GoogleSheetsService {
   }
 
   /**
-   * Delete a holiday request row from the Solicitudes sheet
+   * Soft-cancel a holiday request: updates status, timestamps and cancellation fields
+   * on the existing row (no row deletion). Keeps approver1/2/3 history intact for audit.
    */
-  async deleteRequest(requestId: string): Promise<void> {
-    try {
-      // Find the row index of the request in the data (0-based among data rows)
-      const requests = await this.getAllRequests();
-      const dataRowIndex = requests.findIndex((req) => req.id === requestId);
-
-      if (dataRowIndex === -1) {
-        throw new Error(`Request with ID ${requestId} not found`);
-      }
-
-      // Get sheetId by title
-      const spreadsheet = await this.sheets.spreadsheets.get({
-        spreadsheetId: config.googleSheetsId,
-      });
-
-      const sheet = spreadsheet.data.sheets?.find(
-        (s) => s.properties?.title === config.googleRequestsTabName
-      );
-
-      if (!sheet || sheet.properties?.sheetId === undefined) {
-        throw new Error(`Sheet '${config.googleRequestsTabName}' not found`);
-      }
-
-      const sheetId = sheet.properties.sheetId;
-
-      // Compute absolute row indexes (0-based for entire sheet):
-      // Header is at row 0; data starts at row 1. So add 1 to dataRowIndex
-      const startIndex = 1 + dataRowIndex;
-      const endIndex = startIndex + 1;
-
-      await this.sheets.spreadsheets.batchUpdate({
-        spreadsheetId: config.googleSheetsId,
-        requestBody: {
-          requests: [
-            {
-              deleteDimension: {
-                range: {
-                  sheetId,
-                  dimension: 'ROWS',
-                  startIndex,
-                  endIndex,
-                },
-              },
-            },
-          ],
-        },
-      });
-
-      logger.info({ requestId, rowDeleted: startIndex }, 'Deleted holiday request row');
-    } catch (error) {
-      logger.error({ error, requestId }, 'Error deleting holiday request');
-      throw error;
+  async markRequestAsCancelled(
+    requestId: string,
+    cancelledBy: string,
+    cancelledAt: string
+  ): Promise<HolidayRequest> {
+    const existing = await this.getRequestById(requestId);
+    if (!existing) {
+      throw new Error(`Request with ID ${requestId} not found`);
     }
+
+    const updated: HolidayRequest = {
+      ...existing,
+      status: RequestStatus.CANCELLED,
+      currentApprover: '',
+      updatedAt: cancelledAt,
+      cancelledAt,
+      cancelledBy,
+    };
+
+    return this.updateRequest(requestId, updated);
   }
 
   // ==================== FERIADOS METHODS ====================

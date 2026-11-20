@@ -40,6 +40,33 @@ export enum RequestStatus {
   PENDING = 'PENDING',
   APPROVED = 'APPROVED',
   REJECTED = 'REJECTED',
+  CANCELLED = 'CANCELLED',
+}
+
+/**
+ * Stable machine-readable error codes for cancellation outcomes.
+ * The HTTP status and user-facing message may be reworded; the code is the stable contract.
+ */
+export enum CancelErrorCode {
+  NOT_FOUND = 'NOT_FOUND',
+  NOT_PENDING = 'NOT_PENDING',
+  ALREADY_STARTED = 'ALREADY_STARTED',
+  NOT_OWNER = 'NOT_OWNER',
+  HAS_PARTIAL_APPROVAL = 'HAS_PARTIAL_APPROVAL',
+  MISSING_CANCELLED_BY = 'MISSING_CANCELLED_BY',
+}
+
+/**
+ * Thrown by the service layer so the controller can map code → HTTP status.
+ */
+export class CancelRequestError extends Error {
+  constructor(
+    public code: CancelErrorCode,
+    message: string
+  ) {
+    super(message);
+    this.name = 'CancelRequestError';
+  }
 }
 
 export enum ApprovalStatus {
@@ -76,11 +103,17 @@ export interface HolidayRequest {
   approver3: ApproverInfo;
   createdAt: string;
   updatedAt: string;
+  cancelledAt?: string; // ISO timestamp; only present when status === CANCELLED
+  cancelledBy?: string; // Email of who cancelled (owner or RRHH)
 }
 
 export interface CreateHolidayRequestInput {
   startDate: string; // Format: DD/MM/YYYY
   endDate: string; // Format: DD/MM/YYYY
+}
+
+export interface CancelRequestInput {
+  cancelledBy?: string; // Required with API key auth; ignored with JWT auth
 }
 
 export interface ApprovalActionInput {
