@@ -1,0 +1,961 @@
+openapi: 3.0.3
+info:
+  title: Vacaciones API
+  version: 1.0.0
+  description: |
+    API de gestión de vacaciones y solicitudes para empleados.
+
+    Backend TypeScript/Express con Google Sheets como persistencia.
+    Autenticación dual: Google ID token (JWT) para usuarios humanos y API key para agentes (SilvIA).
+
+    **Convenciones**
+    - Fechas de usuario: `DD/MM/YYYY` (campos `startDate`, `endDate`, `date` en `ApproverInfo`, `startDate` en `EmployeeHoliday`).
+    - Timestamps del sistema: ISO-8601 (`createdAt`, `updatedAt`, `timestamp` en health).
+    - Fechas de feriados: `YYYY-MM-DD`.
+    - Errores: todos los endpoints devuelven JSON `{ "error": "..." }` con HTTP status real (no "Never Error"); salvo `GET /feriados` que agrega `details` en 500.
+  contact:
+    name: The App Master / TAM Evolution
+
+servers:
+  - url: http://localhost:3000
+    description: Desarrollo local
+  - url: https://{host}
+    description: Producción (reemplazar {host})
+    variables:
+      host:
+        default: vacaciones-api.example.com
+
+tags:
+  - name: Health
+    description: Health check
+  - name: Holidays
+    description: Saldo de vacaciones por empleado
+  - name: Requests
+    description: Solicitudes de vacaciones y flujo de aprobación
+  - name: Employees
+    description: Directorio de empleados
+  - name: Feriados
+    description: Feriados oficiales (público)
+
+security:
+  - bearerAuth: []
+  - apiKeyAuth: []
+
+paths:
+  /api/health:
+    get:
+      tags: [Health]
+      operationId: healthCheck
+      summary: Health check
+      description: Endpoint público para verificar que el servicio está vivo.
+      security: []
+      responses:
+        '200':
+          description: Servicio operativo
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, timestamp]
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+                  timestamp:
+                    type: string
+                    format: date-time
+                    example: '2026-11-19T14:32:10.000Z'
+
+  /api/holidays/me:
+    get:
+      tags: [Holidays]
+      operationId: getMyHolidays
+      summary: Saldo de vacaciones del usuario autenticado
+      responses:
+        '200':
+          description: Datos del empleado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmployeeHoliday'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Empleado no existe en la planilla
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/holidays/team:
+    get:
+      tags: [Holidays]
+      operationId: getTeamHolidays
+      summary: Equipo visible según el rol del autenticado
+      description: |
+        - API key: todos los empleados.
+        - RRHH: todos los empleados.
+        - Approver: empleados donde figura como `approver1`, `approver2` o `approver3`.
+        - Empleado sin rol: array vacío.
+      responses:
+        '200':
+          description: Lista de empleados visibles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EmployeeHoliday'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/holidays/{email}:
+    get:
+      tags: [Holidays]
+      operationId: getEmployeeHolidays
+      summary: Saldo de un empleado específico
+      description: |
+        Control de acceso:
+        - El propio empleado puede verse a sí mismo.
+        - RRHH ve a cualquiera.
+        - Approver ve a los empleados de los que es `approver1/2/3`.
+        - API key ve a cualquiera.
+      parameters:
+        - $ref: '#/components/parameters/EmailPath'
+      responses:
+        '200':
+          description: Datos del empleado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmployeeHoliday'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Empleado no encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/requests:
+    post:
+      tags: [Requests]
+      operationId: createRequest
+      summary: Crear una solicitud de vacaciones
+      description: |
+        Calcula días hábiles (excluye sábados, domingos y feriados), valida saldo
+        en el período actual y el siguiente, y chequea solapamientos con
+        solicitudes PENDING/APPROVED existentes. Dispara notificación Slack al
+        empleado y al primer approver.
+
+        - **Usuario humano (JWT):** crea la solicitud para sí mismo. `employeeEmail` se ignora.
+        - **API key:** si pasa `employeeEmail`, crea en nombre de ese empleado.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateHolidayRequestInput'
+            examples:
+              usuario:
+                summary: Usuario humano
+                value:
+                  startDate: '15/12/2026'
+                  endDate: '19/12/2026'
+              apiKey:
+                summary: API key creando en nombre de un empleado
+                value:
+                  startDate: '15/12/2026'
+                  endDate: '19/12/2026'
+                  employeeEmail: ana.perez@tamevolution.com
+      responses:
+        '201':
+          description: Solicitud creada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HolidayRequest'
+        '400':
+          description: |
+            Validación fallida. Mensajes típicos de `error`:
+            - `Start date and end date are required`
+            - Rango inválido (fin anterior a inicio)
+            - Rango en el pasado
+            - Sin días disponibles en el período
+            - Solapa con una solicitud existente
+            - Empleado no existe
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/requests/me:
+    get:
+      tags: [Requests]
+      operationId: getMyRequests
+      summary: Mis solicitudes (ordenadas por `createdAt` descendente)
+      responses:
+        '200':
+          description: Lista de solicitudes del usuario autenticado
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/HolidayRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/requests/pending:
+    get:
+      tags: [Requests]
+      operationId: getPendingRequests
+      summary: Solicitudes pendientes de aprobación por mí
+      description: Devuelve solicitudes `PENDING` donde el usuario autenticado es el `currentApprover`.
+      responses:
+        '200':
+          description: Solicitudes que requieren mi acción
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/HolidayRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/requests/approved:
+    get:
+      tags: [Requests]
+      operationId: getApprovedRequests
+      summary: Solicitudes aprobadas (con filtro por rango)
+      description: |
+        Devuelve todas las solicitudes con `status = APPROVED`. Filtros opcionales
+        por rango usando `timeMin`/`timeMax` en ISO-8601 (se compara contra
+        `startDate`/`endDate` de la solicitud, en zona local, ignorando la hora).
+        Si `timeMin` o `timeMax` tienen formato inválido se ignora ese filtro.
+      parameters:
+        - in: query
+          name: timeMin
+          description: Filtra solicitudes cuyo `endDate` sea ≥ `timeMin`.
+          required: false
+          schema:
+            type: string
+            format: date-time
+          example: '2026-11-01T00:00:00.000Z'
+        - in: query
+          name: timeMax
+          description: Filtra solicitudes cuyo `startDate` sea ≤ `timeMax`.
+          required: false
+          schema:
+            type: string
+            format: date-time
+          example: '2026-11-30T23:59:59.999Z'
+      responses:
+        '200':
+          description: Solicitudes aprobadas en el rango
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/HolidayRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/requests/all:
+    get:
+      tags: [Requests]
+      operationId: getAllRequests
+      summary: Todas las solicitudes
+      description: |
+        Devuelve todas las solicitudes del sistema.
+
+        ⚠️ **Nota del código**: el chequeo de rol RRHH está comentado hoy
+        (`requests.controller.ts:134`), por lo que en la práctica cualquier
+        usuario autenticado puede llamar este endpoint. Reintroducir el guard es
+        una tarea pendiente.
+      responses:
+        '200':
+          description: Lista completa de solicitudes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/HolidayRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/requests/{id}:
+    get:
+      tags: [Requests]
+      operationId: getRequestById
+      summary: Obtener una solicitud por ID
+      description: |
+        Control de acceso:
+        - API key: acceso total.
+        - Usuario: solo si es el solicitante, uno de los approvers o RRHH.
+      parameters:
+        - $ref: '#/components/parameters/RequestIdPath'
+      responses:
+        '200':
+          description: Solicitud encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HolidayRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No existe la solicitud
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/requests/{id}/approve:
+    put:
+      tags: [Requests]
+      operationId: approveRequest
+      summary: Aprobar una solicitud
+      description: |
+        Marca el paso actual de aprobación como `APPROVED` y avanza al siguiente
+        approver. Si no hay más approvers, la solicitud queda `APPROVED` y se
+        actualizan los días tomados del empleado. Notifica al empleado y al
+        siguiente approver por Slack.
+
+        - **Usuario:** aprueba en su nombre (debe ser el `currentApprover`).
+        - **API key:** puede pasar `approverEmail` para aprobar en nombre de otro approver.
+      parameters:
+        - $ref: '#/components/parameters/RequestIdPath'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovalBody'
+      responses:
+        '200':
+          description: Solicitud actualizada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HolidayRequest'
+        '400':
+          description: No se puede aprobar (no es el approver correcto, estado inválido, etc.)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/requests/{id}/reject:
+    put:
+      tags: [Requests]
+      operationId: rejectRequest
+      summary: Rechazar una solicitud
+      description: |
+        Marca la solicitud como `REJECTED`. Notifica al empleado.
+
+        - **Usuario:** rechaza en su nombre.
+        - **API key:** puede pasar `approverEmail` para rechazar en nombre de otro approver.
+      parameters:
+        - $ref: '#/components/parameters/RequestIdPath'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovalBody'
+      responses:
+        '200':
+          description: Solicitud rechazada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HolidayRequest'
+        '400':
+          description: No se puede rechazar (estado inválido, approver incorrecto, etc.)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/requests/{id}/delete:
+    put:
+      tags: [Requests]
+      operationId: cancelRequest
+      summary: Cancelar una solicitud (soft-delete)
+      description: |
+        Marca la solicitud como `CANCELLED` (no borra la fila). Guarda
+        `cancelledAt` y `cancelledBy` para auditoría. Notifica al empleado,
+        al `currentApprover` si existe, y a todos los approvers que ya
+        habían aprobado.
+
+        Reglas aplicadas en orden:
+        1. Si la solicitud no existe → `404 NOT_FOUND`.
+        2. Si `status != PENDING` → `409 NOT_PENDING`.
+        3. Si `startDate` no es estrictamente posterior a hoy en
+           `America/Argentina/Buenos_Aires` → `409 ALREADY_STARTED`.
+        4. Permisos (ver matriz):
+           - RRHH puede cancelar aunque haya aprobaciones parciales.
+           - El dueño puede cancelar solo si **ningún** approver aprobó aún.
+           - El dueño con alguna aprobación parcial → `403 HAS_PARTIAL_APPROVAL`.
+           - Otro usuario autenticado → `403 NOT_OWNER`.
+
+        ⚠️ Sigue siendo un `PUT`, no un `DELETE`, para no romper el frontend.
+
+        Body:
+        - **JWT humano**: el body puede ir vacío; `cancelledBy` se ignora y se
+          deriva del token.
+        - **API key**: `cancelledBy` es obligatorio (si falta → `400 MISSING_CANCELLED_BY`).
+          Puede ser el email del dueño o de una persona RRHH.
+
+        Shape de error estándar: `{ error, code }` donde `code` es uno de los
+        valores del enum `CancelErrorCode` (estable, independiente del idioma del mensaje).
+      parameters:
+        - $ref: '#/components/parameters/RequestIdPath'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelRequestInput'
+            examples:
+              jwt:
+                summary: Usuario humano (JWT) — body vacío
+                value: {}
+              apiKeyOwner:
+                summary: API key cancelando como el dueño
+                value:
+                  cancelledBy: ana.perez@tamevolution.com
+              apiKeyRRHH:
+                summary: API key cancelando como RRHH
+                value:
+                  cancelledBy: rrhh@tamevolution.com
+      responses:
+        '200':
+          description: Solicitud cancelada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HolidayRequest'
+        '400':
+          description: Falta `cancelledBy` en el body (solo con API key)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelError'
+              example:
+                error: Falta cancelledBy en el body
+                code: MISSING_CANCELLED_BY
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: |
+            Sin permisos: `NOT_OWNER` (no es el dueño ni RRHH) o
+            `HAS_PARTIAL_APPROVAL` (dueño con una aprobación parcial).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelError'
+              examples:
+                notOwner:
+                  value:
+                    error: No podés cancelar una solicitud que no es tuya
+                    code: NOT_OWNER
+                hasPartialApproval:
+                  value:
+                    error: Un aprobador ya actuó; contactá a RRHH para cancelar
+                    code: HAS_PARTIAL_APPROVAL
+        '404':
+          description: La solicitud no existe
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelError'
+              example:
+                error: La solicitud no existe
+                code: NOT_FOUND
+        '409':
+          description: |
+            Conflicto de estado: `NOT_PENDING` (ya aprobada/rechazada/cancelada)
+            o `ALREADY_STARTED` (fecha de inicio ya llegó).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelError'
+              examples:
+                notPending:
+                  value:
+                    error: La solicitud no está pendiente, su estado es APPROVED
+                    code: NOT_PENDING
+                alreadyStarted:
+                  value:
+                    error: La solicitud ya comenzó; contactá a RRHH
+                    code: ALREADY_STARTED
+
+  /api/employees:
+    get:
+      tags: [Employees]
+      operationId: getAllEmployees
+      summary: Directorio de empleados
+      description: |
+        - API key: todos.
+        - Resto: hoy también todos (el chequeo de RRHH está bypasseado en
+          `employees.controller.ts:29` con `const isRRHH = true`). Reintroducir
+          el guard es tarea pendiente.
+      responses:
+        '200':
+          description: Lista de empleados
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EmployeeHoliday'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/employees/me:
+    get:
+      tags: [Employees]
+      operationId: getMyEmployeeInfo
+      summary: Datos del empleado autenticado
+      description: Equivalente funcional a `GET /api/holidays/me`.
+      responses:
+        '200':
+          description: Datos del empleado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmployeeHoliday'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Empleado no encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/employees/{email}:
+    get:
+      tags: [Employees]
+      operationId: getEmployeeByEmail
+      summary: Empleado por email
+      description: Mismas reglas de acceso que `GET /api/holidays/{email}`.
+      parameters:
+        - $ref: '#/components/parameters/EmailPath'
+      responses:
+        '200':
+          description: Datos del empleado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmployeeHoliday'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Empleado no encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/feriados:
+    get:
+      tags: [Feriados]
+      operationId: getFeriados
+      summary: Feriados oficiales (público)
+      description: |
+        Lee de las pestañas "Feriados YYYY" en Google Sheets. Devuelve los
+        feriados del año actual ± `years` años (default 2).
+      security: []
+      parameters:
+        - in: query
+          name: years
+          description: Rango de años alrededor del actual. Entero entre 0 y 10.
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 10
+            default: 2
+      responses:
+        '200':
+          description: Lista de feriados
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Feriado'
+        '400':
+          description: '`years` fuera del rango 0–10'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Error del servidor
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Error'
+                  - type: object
+                    properties:
+                      details:
+                        type: string
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Google ID Token (JWT)
+      description: |
+        Token ID de Google (JWT) verificado contra `GOOGLE_CLIENT_ID`. El header
+        detecta el token por presencia de puntos (`.`); si no tiene puntos, se
+        intenta validar como API key.
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: |
+        API key pre-compartida para el agente SilvIA (lista en `API_KEYS`
+        del `.env`). También aceptada en `Authorization: Bearer <key>` si la
+        key no contiene puntos. Habilita funcionalidad extra: `employeeEmail`
+        en `POST /api/requests` y `approverEmail` en aprobar/rechazar.
+
+  parameters:
+    EmailPath:
+      in: path
+      name: email
+      required: true
+      description: Email del empleado (comparación case-insensitive).
+      schema:
+        type: string
+        format: email
+      example: ana.perez@tamevolution.com
+
+    RequestIdPath:
+      in: path
+      name: id
+      required: true
+      description: ID de la solicitud (formato `REQ-{timestamp}-{random}`).
+      schema:
+        type: string
+      example: REQ-1731760000-ab12cd
+
+  responses:
+    Unauthorized:
+      description: Falta el token o es inválido.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Autenticado pero sin permisos para el recurso.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: Error del servidor.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          example: Employee data not found
+
+    RequestStatus:
+      type: string
+      enum: [PENDING, APPROVED, REJECTED, CANCELLED]
+
+    CancelErrorCode:
+      type: string
+      enum:
+        - NOT_FOUND
+        - NOT_PENDING
+        - ALREADY_STARTED
+        - NOT_OWNER
+        - HAS_PARTIAL_APPROVAL
+        - MISSING_CANCELLED_BY
+
+    CancelError:
+      type: object
+      required: [error, code]
+      properties:
+        error:
+          type: string
+          description: Mensaje legible (puede traducirse).
+        code:
+          $ref: '#/components/schemas/CancelErrorCode'
+
+    CancelRequestInput:
+      type: object
+      description: |
+        Body opcional para `PUT /api/requests/{id}/delete`.
+        Con JWT, se ignora. Con API key, `cancelledBy` es obligatorio.
+      properties:
+        cancelledBy:
+          type: string
+          format: email
+          description: |
+            **Solo API key.** Email del actor que cancela. Puede ser el dueño
+            de la solicitud o una persona RRHH (en ese caso bypassa el check
+            de aprobaciones parciales).
+
+    ApprovalStatus:
+      type: string
+      enum: [PENDING, APPROVED, REJECTED, NOT_REQUIRED]
+
+    ApproverInfo:
+      type: object
+      required: [email, status, date]
+      properties:
+        email:
+          type: string
+          format: email
+          description: Email del approver. Puede ser string vacío si no aplica.
+        status:
+          $ref: '#/components/schemas/ApprovalStatus'
+        date:
+          type: string
+          description: |
+            Fecha de la decisión en `DD/MM/YYYY`, o string vacío si todavía no actuó.
+          example: '19/11/2026'
+
+    EmployeeHoliday:
+      type: object
+      description: |
+        Estado del empleado y su saldo de vacaciones. Contempla el período actual
+        (Oct 1 – Sep 30) y el período siguiente.
+      required:
+        - email
+        - emailRaw
+        - lastName
+        - firstName
+        - startDate
+        - carriedOverDays
+        - correspondingDays
+        - daysTaken
+        - daysRemaining
+        - correspondingDaysNextPeriod
+        - daysTakenNextPeriod
+        - daysRemainingNextPeriod
+        - approver1
+        - approver2
+        - approver3
+      properties:
+        email:
+          type: string
+          format: email
+        emailRaw:
+          type: string
+          description: Email tal cual aparece en la planilla (sin lowercase).
+        lastName:
+          type: string
+        firstName:
+          type: string
+        startDate:
+          type: string
+          description: Fecha de ingreso del empleado en `DD/MM/YYYY`.
+          example: '15/03/2022'
+        carriedOverDays:
+          type: number
+          description: Días arrastrados del año anterior.
+        correspondingDays:
+          type: number
+          description: Días asignados al período actual.
+        daysTaken:
+          type: number
+          description: Días ya tomados del período actual.
+        daysRemaining:
+          type: number
+          description: Saldo disponible del período actual.
+        correspondingDaysNextPeriod:
+          type: number
+        daysTakenNextPeriod:
+          type: number
+        daysRemainingNextPeriod:
+          type: number
+        approver1:
+          type: string
+          description: Email del primer approver (puede ser vacío).
+        approver2:
+          type: string
+          description: Email del segundo approver (puede ser vacío).
+        approver3:
+          type: string
+          description: Email del tercer approver, o el literal `RRHH`.
+
+    CreateHolidayRequestInput:
+      type: object
+      required: [startDate, endDate]
+      properties:
+        startDate:
+          type: string
+          pattern: '^\d{2}/\d{2}/\d{4}$'
+          description: Fecha de inicio en `DD/MM/YYYY`.
+          example: '15/12/2026'
+        endDate:
+          type: string
+          pattern: '^\d{2}/\d{2}/\d{4}$'
+          description: Fecha de fin en `DD/MM/YYYY` (inclusive).
+          example: '19/12/2026'
+        employeeEmail:
+          type: string
+          format: email
+          description: |
+            **Solo API key.** Email del empleado para crear la solicitud en su
+            nombre. Si se envía con autenticación JWT, se ignora y se usa el
+            email del token.
+
+    ApprovalBody:
+      type: object
+      description: Cuerpo opcional para aprobar/rechazar.
+      properties:
+        approverEmail:
+          type: string
+          format: email
+          description: |
+            **Solo API key.** Email del approver en cuyo nombre se actúa. Ignorado
+            con autenticación JWT.
+
+    HolidayRequest:
+      type: object
+      required:
+        - id
+        - employeeEmail
+        - employeeName
+        - startDate
+        - endDate
+        - totalDays
+        - currentPeriodDays
+        - nextPeriodDays
+        - status
+        - currentApprover
+        - approver1
+        - approver2
+        - approver3
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          example: REQ-1731760000-ab12cd
+        employeeEmail:
+          type: string
+          format: email
+        employeeName:
+          type: string
+          example: Ana Pérez
+        startDate:
+          type: string
+          description: Fecha de inicio en `DD/MM/YYYY`.
+          example: '15/12/2026'
+        endDate:
+          type: string
+          description: Fecha de fin en `DD/MM/YYYY`.
+          example: '19/12/2026'
+        totalDays:
+          type: number
+          description: Total de días hábiles de la solicitud.
+        currentPeriodDays:
+          type: number
+          description: Días que descuenta del período actual.
+        nextPeriodDays:
+          type: number
+          description: Días que descuenta del período siguiente.
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        currentApprover:
+          type: string
+          description: |
+            Email del approver que debe actuar. Vacío cuando ya no hay pendientes
+            (APPROVED o REJECTED final).
+        approver1:
+          $ref: '#/components/schemas/ApproverInfo'
+        approver2:
+          $ref: '#/components/schemas/ApproverInfo'
+        approver3:
+          $ref: '#/components/schemas/ApproverInfo'
+        createdAt:
+          type: string
+          format: date-time
+          example: '2026-11-19T14:32:10.000Z'
+        updatedAt:
+          type: string
+          format: date-time
+          example: '2026-11-19T15:10:00.000Z'
+        cancelledAt:
+          type: string
+          format: date-time
+          description: Timestamp ISO-8601 de la cancelación. Solo presente si `status === CANCELLED`.
+          example: '2026-11-20T16:45:00.000Z'
+        cancelledBy:
+          type: string
+          format: email
+          description: Email del actor que canceló (dueño o RRHH). Solo presente si `status === CANCELLED`.
+          example: ana.perez@tamevolution.com
+
+    Feriado:
+      type: object
+      required: [year, date, description]
+      properties:
+        year:
+          type: integer
+          example: 2026
+        date:
+          type: string
+          description: Fecha del feriado en `YYYY-MM-DD`.
+          example: '2026-12-25'
+        description:
+          type: string
+          example: Navidad

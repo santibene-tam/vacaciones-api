@@ -151,6 +151,45 @@ export function isValidDateFormat(dateStr: string): boolean {
 }
 
 /**
+ * Get today's date (YYYY-MM-DD) in the America/Argentina/Buenos_Aires timezone.
+ * Uses Intl so DST changes (if ever reintroduced) are handled by the runtime.
+ */
+export function getTodayInBuenosAires(): { year: number; month: number; day: number } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+
+  const map: Record<string, string> = {};
+  for (const p of parts) {
+    if (p.type !== 'literal') map[p.type] = p.value;
+  }
+
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+  };
+}
+
+/**
+ * Returns true if `startDateStr` (DD/MM/YYYY) is strictly after today
+ * in the America/Argentina/Buenos_Aires timezone. Same day or past returns false.
+ */
+export function isDateAfterTodayInBuenosAires(startDateStr: string): boolean {
+  if (!isValidDateFormat(startDateStr)) return false;
+
+  const [day, month, year] = startDateStr.split('/').map(Number);
+  const today = getTodayInBuenosAires();
+
+  if (year !== today.year) return year > today.year;
+  if (month !== today.month) return month > today.month;
+  return day > today.day;
+}
+
+/**
  * Check if date range is valid (start before end, both in future or present)
  */
 export function isValidDateRange(startDateStr: string, endDateStr: string): boolean {
