@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth';
 import googleSheetsService from '../services/googleSheets.service';
+import { enrichEmployeeWithSeniority } from '../services/seniority.service';
 import logger from '../utils/logger';
 
 /**
@@ -23,8 +24,9 @@ export async function getMyHolidays(req: AuthenticatedRequest, res: Response): P
       return;
     }
 
+    const enriched = enrichEmployeeWithSeniority(employee);
     logger.info({ email: userEmail }, 'Retrieved holiday data for user');
-    res.json(employee);
+    res.json(enriched);
   } catch (error) {
     logger.error({ error }, 'Error retrieving user holidays');
     res.status(500).json({ error: 'Failed to retrieve holiday data' });
@@ -57,7 +59,7 @@ export async function getEmployeeHolidays(req: AuthenticatedRequest, res: Respon
         return;
       }
       logger.info({ apiKey: true, targetEmail: email }, 'API key accessed employee data');
-      res.json(employee);
+      res.json(enrichEmployeeWithSeniority(employee));
       return;
     }
 
@@ -68,7 +70,7 @@ export async function getEmployeeHolidays(req: AuthenticatedRequest, res: Respon
         res.status(404).json({ error: 'Employee data not found' });
         return;
       }
-      res.json(employee);
+      res.json(enrichEmployeeWithSeniority(employee));
       return;
     }
 
@@ -81,7 +83,7 @@ export async function getEmployeeHolidays(req: AuthenticatedRequest, res: Respon
         return;
       }
       logger.info({ rrhh: userEmail, targetEmail: email }, 'RRHH accessed employee data');
-      res.json(employee);
+      res.json(enrichEmployeeWithSeniority(employee));
       return;
     }
 
@@ -107,7 +109,7 @@ export async function getEmployeeHolidays(req: AuthenticatedRequest, res: Respon
     }
 
     logger.info({ approver: userEmail, targetEmail: email }, 'Approver accessed employee data');
-    res.json(employee);
+    res.json(enrichEmployeeWithSeniority(employee));
   } catch (error) {
     logger.error({ error }, 'Error retrieving employee holidays');
     res.status(500).json({ error: 'Failed to retrieve holiday data' });
@@ -131,7 +133,7 @@ export async function getTeamHolidays(req: AuthenticatedRequest, res: Response):
     if (req.user?.isApiKey) {
       const allEmployees = await googleSheetsService.getEmployeesData();
       logger.info({ apiKey: true, count: allEmployees.length }, 'API key accessed all employees');
-      res.json(allEmployees);
+      res.json(allEmployees.map((e) => enrichEmployeeWithSeniority(e)));
       return;
     }
 
@@ -140,7 +142,7 @@ export async function getTeamHolidays(req: AuthenticatedRequest, res: Response):
     if (isRRHH) {
       const allEmployees = await googleSheetsService.getEmployeesData();
       logger.info({ rrhh: userEmail, count: allEmployees.length }, 'RRHH accessed all employees');
-      res.json(allEmployees);
+      res.json(allEmployees.map((e) => enrichEmployeeWithSeniority(e)));
       return;
     }
 
@@ -150,7 +152,7 @@ export async function getTeamHolidays(req: AuthenticatedRequest, res: Response):
       { approver: userEmail, count: employees.length },
       'Retrieved team holiday data for approver'
     );
-    res.json(employees);
+    res.json(employees.map((e) => enrichEmployeeWithSeniority(e)));
   } catch (error) {
     logger.error({ error }, 'Error retrieving team holidays');
     res.status(500).json({ error: 'Failed to retrieve team holiday data' });

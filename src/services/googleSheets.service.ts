@@ -1,7 +1,16 @@
 import { google } from 'googleapis';
 import config from '../config';
 import logger from '../utils/logger';
-import { EmployeeHoliday, HolidayRequest, ApprovalStatus, RequestStatus } from '../types';
+import {
+  EmployeeHoliday,
+  HolidayRequest,
+  ApprovalStatus,
+  RequestStatus,
+  LeaveRequest,
+  LeaveStatus,
+  LeaveType,
+  LeaveUnit,
+} from '../types';
 
 class GoogleSheetsService {
   private sheets;
@@ -482,6 +491,147 @@ class GoogleSheetsService {
     );
 
     return allFeriados;
+  }
+
+  // ==================== LEAVES METHODS ====================
+
+  /**
+   * Parsea una fila de la pestaña Solicitudes_Licencias (columnas A–R).
+   */
+  private parseLeaveRow(row: string[]): LeaveRequest {
+    return {
+      id: row[0] || '',
+      createdAt: row[1] || '',
+      employeeEmail: row[2] || '',
+      employeeName: row[3] || '',
+      leaveType: (row[4] || '') as LeaveType,
+      startDate: row[5] || '',
+      endDate: row[6] || '',
+      days: parseFloat(row[7]) || 0,
+      unit: ((row[8] || 'corridos') as LeaveUnit),
+      reason: row[9] || undefined,
+      certificateUrl: row[10] || undefined,
+      status: (row[11] || 'PENDING') as LeaveStatus,
+      hrApproverEmail: row[12] || undefined,
+      decidedAt: row[13] || undefined,
+      rejectionReason: row[14] || undefined,
+      cancelledAt: row[15] || undefined,
+      cancelledBy: row[16] || undefined,
+      source: ((row[17] || 'api') as LeaveRequest['source']),
+    };
+  }
+
+  /**
+   * Serializa un LeaveRequest a fila de la hoja.
+   */
+  private leaveToRow(leave: LeaveRequest): (string | number)[] {
+    return [
+      leave.id,
+      leave.createdAt,
+      leave.employeeEmail,
+      leave.employeeName,
+      leave.leaveType,
+      leave.startDate,
+      leave.endDate,
+      leave.days,
+      leave.unit,
+      leave.reason || '',
+      leave.certificateUrl || '',
+      leave.status,
+      leave.hrApproverEmail || '',
+      leave.decidedAt || '',
+      leave.rejectionReason || '',
+      leave.cancelledAt || '',
+      leave.cancelledBy || '',
+      leave.source,
+    ];
+  }
+
+  async getAllLeaveRequests(): Promise<LeaveRequest[]> {
+    try {
+      const range = `${config.googleLeavesTabName}!A2:R`;
+      const response = await this.sheets.spreadsheets.values.get({
+        spreadsheetId: config.googleSheetsId,
+        range,
+      });
+      const rows = response.data.values;
+      if (!rows || rows.length === 0) {
+        return [];
+      }
+      const leaves = rows.map((row) => this.parseLeaveRow(row));
+      logger.info({ count: leaves.length }, 'Fetched leave requests from Google Sheets');
+      return leaves;
+    } catch (error: any) {
+      // Si la pestaña no existe todavía, devolver vacío y loguear warning.
+      const errorCode = error?.code || error?.status;
+      const errorMessage = error?.message || '';
+      if (
+        errorCode === 400 ||
+        errorCode === 404 ||
+        errorMessage.includes('Unable to parse range') ||
+        errorMessage.includes('not found')
+      ) {
+        logger.warn(
+          { tab: config.googleLeavesTabName },
+          'Leaves tab not found — creála en la planilla; devuelvo vacío'
+        );
+        return [];
+      }
+      logger.error({ error }, 'Error fetching leaves from Google Sheets');
+      throw error;
+    }
+  }
+
+  async getLeaveRequestById(id: string): Promise<LeaveRequest | null> {
+    const all = await this.getAllLeaveRequests();
+    return all.find((l) => l.id === id) || null;
+  }
+
+  async getLeaveRequestsByEmployee(employeeEmail: string): Promise<LeaveRequest[]> {
+    const all = await this.getAllLeaveRequests();
+    return all.filter((l) => l.employeeEmail.toLowerCase() === employeeEmail.toLowerCase());
+  }
+
+  async createLeaveRequest(leave: LeaveRequest): Promise<LeaveRequest> {
+    try {
+      const range = `${config.googleLeavesTabName}!A:R`;
+      const row = this.leaveToRow(leave);
+      await this.sheets.spreadsheets.values.append({
+        spreadsheetId: config.googleSheetsId,
+        range,
+        valueInputOption: 'RAW',
+        requestBody: { values: [row] },
+      });
+      logger.info({ leaveId: leave.id, employee: leave.employeeEmail }, 'Leave request created');
+      return leave;
+    } catch (error) {
+      logger.error({ error, leaveId: leave.id }, 'Error creating leave request');
+      throw error;
+    }
+  }
+
+  async updateLeaveRequest(id: string, updated: LeaveRequest): Promise<LeaveRequest> {
+    try {
+      const all = await this.getAllLeaveRequests();
+      const rowIndex = all.findIndex((l) => l.id === id);
+      if (rowIndex === -1) {
+        throw new Error(`Leave request ${id} not found`);
+      }
+      const rowNumber = rowIndex + 2;
+      const range = `${config.googleLeavesTabName}!A${rowNumber}:R${rowNumber}`;
+      const row = this.leaveToRow(updated);
+      await this.sheets.spreadsheets.values.update({
+        spreadsheetId: config.googleSheetsId,
+        range,
+        valueInputOption: 'RAW',
+        requestBody: { values: [row] },
+      });
+      logger.info({ leaveId: id, rowNumber }, 'Updated leave request');
+      return updated;
+    } catch (error) {
+      logger.error({ error, leaveId: id }, 'Error updating leave request');
+      throw error;
+    }
   }
 }
 
