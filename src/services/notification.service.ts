@@ -1,7 +1,8 @@
 import axios from 'axios';
 import logger from '../utils/logger';
 import config from '../config';
-import { HolidayRequest, ApprovalStatus } from '../types';
+import { HolidayRequest, ApprovalStatus, LeaveRequest, LeaveStatus } from '../types';
+import { getLeaveRule } from '../config/leaveRules';
 import { WebClient } from '@slack/web-api';
 
 // Slack WebClient (optional)
@@ -636,6 +637,116 @@ export default {
       return postToWebhook({ text: fallbackText, blocks: fallbackBlocks });
     }
 
+    return { ok: true, details: results };
+  },
+
+  // ==================== LEAVES NOTIFICATIONS ====================
+
+  /**
+   * Notifica la creación de una licencia: DM al empleado y DM a cada RR. HH.
+   */
+  async notifyLeaveCreated(leave: LeaveRequest, hrApprovers: string[]) {
+    const rule = getLeaveRule(leave.leaveType);
+    const typeName = rule?.name || leave.leaveType;
+    const url = `${config.frontendUrl}/dashboard`;
+
+    const employeeText = `📝 Registramos tu solicitud de *${typeName}* del *${leave.startDate}* al *${leave.endDate}* (${leave.days} ${leave.unit}). Quedó pendiente de aprobación de RR. HH.`;
+    const hrText = `🟡 Nueva licencia de *${leave.employeeName}*: *${typeName}* del *${leave.startDate}* al *${leave.endDate}* (${leave.days} ${leave.unit}). ID: \`${leave.id}\`. Revisar: ${url}`;
+
+    const results: any[] = [];
+
+    try {
+      const r = await dmUserByEmail(leave.employeeEmail, employeeText);
+      results.push({ to: leave.employeeEmail, via: 'dm', result: r });
+    } catch (err) {
+      logger.warn({ err, leaveId: leave.id }, 'Error sending leave-created DM to employee');
+    }
+
+    for (const hr of hrApprovers) {
+      try {
+        const r = await dmUserByEmail(hr, hrText);
+        results.push({ to: hr, via: 'dm', result: r });
+      } catch (err) {
+        logger.warn({ err, hr, leaveId: leave.id }, 'Error sending leave-created DM to HR');
+      }
+    }
+
+    const anyDmOk = results.some((r) => r.result?.ok);
+    if (!anyDmOk) {
+      return postToWebhook({ text: hrText });
+    }
+    return { ok: true, details: results };
+  },
+
+  /**
+   * Notifica al empleado el resultado (APPROVED o REJECTED).
+   */
+  async notifyLeaveDecided(leave: LeaveRequest, decidedBy: string) {
+    const rule = getLeaveRule(leave.leaveType);
+    const typeName = rule?.name || leave.leaveType;
+    const url = `${config.frontendUrl}/dashboard`;
+
+    let text: string;
+    if (leave.status === LeaveStatus.APPROVED) {
+      text = `✅ Tu licencia de *${typeName}* del *${leave.startDate}* al *${leave.endDate}* fue aprobada por *${decidedBy}*. Ver: ${url}`;
+    } else if (leave.status === LeaveStatus.REJECTED) {
+      const reason = leave.rejectionReason ? `\nMotivo: _${leave.rejectionReason}_` : '';
+      text = `❌ Tu licencia de *${typeName}* del *${leave.startDate}* al *${leave.endDate}* fue rechazada por *${decidedBy}*.${reason}`;
+    } else {
+      text = `🔄 Tu licencia de *${typeName}* cambió al estado ${leave.status}`;
+    }
+
+    try {
+      const r = await dmUserByEmail(leave.employeeEmail, text);
+      if (!r?.ok) {
+        return postToWebhook({ text });
+      }
+      return { ok: true };
+    } catch (err) {
+      logger.warn({ err, leaveId: leave.id }, 'Error sending leave-decided DM');
+      return postToWebhook({ text });
+    }
+  },
+
+  /**
+   * Notifica a RR. HH. cuando se cancela una licencia.
+   */
+  async notifyLeaveCancelled(leave: LeaveRequest, cancelledBy: string, hrApprovers: string[]) {
+    const rule = getLeaveRule(leave.leaveType);
+    const typeName = rule?.name || leave.leaveType;
+    const cancelledByOwner =
+      leave.employeeEmail.toLowerCase() === cancelledBy.toLowerCase();
+
+    const employeeText = cancelledByOwner
+      ? `✅ Cancelaste tu licencia de *${typeName}* (${leave.startDate} - ${leave.endDate}).`
+      : `⚠️ RR. HH. (*${cancelledBy}*) canceló tu licencia de *${typeName}* (${leave.startDate} - ${leave.endDate}).`;
+
+    const hrText = `🗑️ Licencia cancelada: *${leave.employeeName}* — *${typeName}* (${leave.startDate} - ${leave.endDate}). Cancelada por *${cancelledBy}*. ID: \`${leave.id}\``;
+
+    const results: any[] = [];
+
+    try {
+      const r = await dmUserByEmail(leave.employeeEmail, employeeText);
+      results.push({ to: leave.employeeEmail, via: 'dm', result: r });
+    } catch (err) {
+      logger.warn({ err, leaveId: leave.id }, 'Error sending leave-cancelled DM to employee');
+    }
+
+    for (const hr of hrApprovers) {
+      // Evitar doble-DM si el que canceló es RR. HH.
+      if (hr.toLowerCase() === cancelledBy.toLowerCase()) continue;
+      try {
+        const r = await dmUserByEmail(hr, hrText);
+        results.push({ to: hr, via: 'dm', result: r });
+      } catch (err) {
+        logger.warn({ err, hr, leaveId: leave.id }, 'Error sending leave-cancelled DM to HR');
+      }
+    }
+
+    const anyDmOk = results.some((r) => r.result?.ok);
+    if (!anyDmOk) {
+      return postToWebhook({ text: hrText });
+    }
     return { ok: true, details: results };
   },
 };

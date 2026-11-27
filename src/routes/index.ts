@@ -3,6 +3,7 @@ import holidaysRoutes from './holidays.routes';
 import requestsRoutes from './requests.routes';
 import employeesRoutes from './employees.routes';
 import feriadosRoutes from './feriados.routes';
+import leavesRoutes from './leaves.routes';
 
 const router = Router();
 
@@ -16,5 +17,6 @@ router.use('/holidays', holidaysRoutes);
 router.use('/requests', requestsRoutes);
 router.use('/employees', employeesRoutes);
 router.use('/feriados', feriadosRoutes);
+router.use('/leaves', leavesRoutes);
 
 export default router;

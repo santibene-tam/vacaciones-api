@@ -32,6 +32,8 @@ tags:
     description: Saldo de vacaciones por empleado
   - name: Requests
     description: Solicitudes de vacaciones y flujo de aprobación
+  - name: Leaves
+    description: Licencias especiales (art. 158/177 LCT) con aprobación de RR. HH.
   - name: Employees
     description: Directorio de empleados
   - name: Feriados
@@ -522,6 +524,286 @@ paths:
                     error: La solicitud ya comenzó; contactá a RRHH
                     code: ALREADY_STARTED
 
+  /api/leaves/types:
+    get:
+      tags: [Leaves]
+      operationId: listLeaveTypes
+      summary: Tipos de licencia disponibles (reglas hardcoded)
+      description: |
+        Fuente única de verdad. n8n consume este endpoint para armar el
+        prompt de SilvIA y la herramienta de tipos.
+      responses:
+        '200':
+          description: Lista de reglas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  types:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LeaveRule'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/leaves:
+    post:
+      tags: [Leaves]
+      operationId: createLeave
+      summary: Crear solicitud de licencia
+      description: |
+        JWT: crea para el usuario autenticado.
+        API key: puede pasar `employeeEmail` para crear en nombre de otro empleado.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLeaveRequestInput'
+      responses:
+        '201':
+          description: Licencia creada en estado PENDING
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+        '400':
+          $ref: '#/components/responses/LeaveBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/LeaveNotFound'
+        '409':
+          $ref: '#/components/responses/LeaveConflict'
+
+  /api/leaves/me:
+    get:
+      tags: [Leaves]
+      operationId: getMyLeaves
+      summary: Mis licencias (ordenadas por createdAt descendente)
+      parameters:
+        - in: query
+          name: employeeEmail
+          required: false
+          schema:
+            type: string
+            format: email
+          description: Solo con API key. Filtra por empleado.
+      responses:
+        '200':
+          description: Lista de licencias
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LeaveRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/leaves/pending:
+    get:
+      tags: [Leaves]
+      operationId: getPendingLeaves
+      summary: Licencias PENDING (solo RR. HH. o API key)
+      responses:
+        '200':
+          description: Lista de licencias pendientes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LeaveRequest'
+        '403':
+          description: Solo RR. HH. puede ver pendientes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/leaves/all:
+    get:
+      tags: [Leaves]
+      operationId: getAllLeaves
+      summary: Todas las licencias (solo RR. HH. o API key)
+      responses:
+        '200':
+          description: Lista completa
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LeaveRequest'
+        '403':
+          description: Solo RR. HH.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/leaves/{id}:
+    get:
+      tags: [Leaves]
+      operationId: getLeaveById
+      summary: Detalle de una licencia
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Licencia
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+        '403':
+          description: No autorizado (no es el dueño ni RR. HH.)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/LeaveNotFound'
+
+  /api/leaves/{id}/approve:
+    put:
+      tags: [Leaves]
+      operationId: approveLeave
+      summary: Aprobar licencia (solo RR. HH.)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                hrApproverEmail:
+                  type: string
+                  format: email
+                  description: |
+                    **Solo API key.** Email de RR. HH. en cuyo nombre se aprueba.
+      responses:
+        '200':
+          description: Licencia aprobada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+        '400':
+          $ref: '#/components/responses/LeaveBadRequest'
+        '403':
+          description: El actor no es RR. HH.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/LeaveNotFound'
+        '409':
+          $ref: '#/components/responses/LeaveConflict'
+
+  /api/leaves/{id}/reject:
+    put:
+      tags: [Leaves]
+      operationId: rejectLeave
+      summary: Rechazar licencia (solo RR. HH.)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  description: Motivo del rechazo (obligatorio).
+                hrApproverEmail:
+                  type: string
+                  format: email
+                  description: |
+                    **Solo API key.** Email de RR. HH. en cuyo nombre se rechaza.
+      responses:
+        '200':
+          description: Licencia rechazada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+        '400':
+          $ref: '#/components/responses/LeaveBadRequest'
+        '403':
+          description: El actor no es RR. HH.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/LeaveNotFound'
+        '409':
+          $ref: '#/components/responses/LeaveConflict'
+
+  /api/leaves/{id}/cancel:
+    put:
+      tags: [Leaves]
+      operationId: cancelLeave
+      summary: Cancelar licencia (dueño o RR. HH.)
+      description: |
+        Soft-delete: status → CANCELLED. Debe estar PENDING o APPROVED y la
+        startDate tiene que ser futura. API key requiere `cancelledBy` en el body.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                cancelledBy:
+                  type: string
+                  format: email
+                  description: |
+                    **Solo API key.** Obligatorio.
+      responses:
+        '200':
+          description: Licencia cancelada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveRequest'
+        '400':
+          $ref: '#/components/responses/LeaveBadRequest'
+        '403':
+          description: El actor no es el dueño ni RR. HH.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/LeaveNotFound'
+        '409':
+          $ref: '#/components/responses/LeaveConflict'
+
   /api/employees:
     get:
       tags: [Employees]
@@ -703,6 +985,30 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    LeaveBadRequest:
+      description: |
+        Error de validación de negocio en una licencia. El `code` indica el motivo
+        (ver `LeaveErrorCode`). Incluye `INVALID_TYPE`, `INVALID_DATE_RANGE`,
+        `INVALID_DAYS`, `MISSING_CERTIFICATE`, `MISSING_BUSINESS_DAY`,
+        `MISSING_REJECTION_REASON`, `MISSING_CANCELLED_BY`, `MISSING_HR_EMAIL`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/LeaveError'
+    LeaveNotFound:
+      description: Licencia o empleado no encontrado.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/LeaveError'
+    LeaveConflict:
+      description: |
+        Conflicto de estado o reglas. Incluye `NOT_PENDING`, `ALREADY_STARTED`,
+        `ANNUAL_CAP_EXCEEDED`, `OVERLAP`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/LeaveError'
 
   schemas:
     Error:
@@ -834,6 +1140,51 @@ components:
         approver3:
           type: string
           description: Email del tercer approver, o el literal `RRHH`.
+        seniority:
+          $ref: '#/components/schemas/SeniorityInfo'
+        seniorityNextPeriod:
+          $ref: '#/components/schemas/SeniorityInfo'
+        seniorityWarning:
+          type: string
+          description: |
+            Presente si `startDate` no es parseable. `correspondingDays` queda
+            con el valor original de la planilla y RR. HH. debe corregirlo.
+          example: Fecha de ingreso no definida o inválida — avisar a RR. HH.
+
+    SeniorityInfo:
+      type: object
+      description: |
+        Metadata del cálculo de antigüedad (LCT art. 150/151). Un período completo
+        toma la tabla por años de antigüedad; cuando el empleado trabajó menos
+        de la mitad de los días hábiles del período, aplica proporcional 1/20.
+      required:
+        - seniorityYears
+        - workedBusinessDays
+        - totalBusinessDaysInYear
+        - isProportional
+        - calculationBasedOn
+      properties:
+        seniorityYears:
+          type: integer
+          description: Años completos al corte del período (30/9).
+          example: 7
+        workedBusinessDays:
+          type: integer
+          description: Días hábiles trabajados dentro del período.
+          example: 251
+        totalBusinessDaysInYear:
+          type: integer
+          description: Días hábiles totales del período.
+          example: 251
+        isProportional:
+          type: boolean
+          description: True cuando aplicó la regla proporcional (art. 151).
+        calculationBasedOn:
+          type: string
+          enum:
+            - LCT art. 150
+            - LCT art. 151 (proporcional)
+            - Ingresado después del período
 
     CreateHolidayRequestInput:
       type: object
@@ -959,3 +1310,187 @@ components:
         description:
           type: string
           example: Navidad
+
+    LeaveType:
+      type: string
+      enum:
+        - NACIMIENTO
+        - MATRIMONIO
+        - FALLECIMIENTO_FAMILIAR
+        - FALLECIMIENTO_HERMANO
+        - EXAMEN
+        - MUDANZA
+        - ENFERMEDAD
+        - MATERNIDAD
+
+    LeaveStatus:
+      type: string
+      enum: [PENDING, APPROVED, REJECTED, CANCELLED]
+
+    LeaveRule:
+      type: object
+      description: |
+        Regla hardcoded de un tipo de licencia. `days` puede ser un número fijo
+        (ej. matrimonio = 10), un rango `[min, max]` (mudanza = 1 a 2), o
+        `"variable"` cuando la duración la define el certificado (enfermedad).
+      required: [code, name, days, unit, requiresCertificate, mustIncludeBusinessDay, legalBasis]
+      properties:
+        code:
+          $ref: '#/components/schemas/LeaveType'
+        name:
+          type: string
+        days:
+          oneOf:
+            - type: number
+            - type: array
+              items: { type: number }
+              minItems: 2
+              maxItems: 2
+            - type: string
+              enum: [variable]
+        unit:
+          type: string
+          enum: [corridos, habiles]
+        annualCap:
+          type: object
+          properties:
+            days:
+              type: integer
+              description: Tope anual acumulable en días.
+            events:
+              type: integer
+              description: Tope anual de eventos.
+        requiresCertificate:
+          type: boolean
+        mustIncludeBusinessDay:
+          type: boolean
+          description: Art. 160 LCT.
+        legalBasis:
+          type: string
+          example: art. 158 LCT
+
+    LeaveRequest:
+      type: object
+      required:
+        - id
+        - createdAt
+        - employeeEmail
+        - employeeName
+        - leaveType
+        - startDate
+        - endDate
+        - days
+        - unit
+        - status
+        - source
+      properties:
+        id:
+          type: string
+          example: LEAVE-1732650000000-123
+        createdAt:
+          type: string
+          format: date-time
+        employeeEmail:
+          type: string
+          format: email
+        employeeName:
+          type: string
+        leaveType:
+          $ref: '#/components/schemas/LeaveType'
+        startDate:
+          type: string
+          pattern: '^\d{2}/\d{2}/\d{4}$'
+          example: '15/12/2026'
+        endDate:
+          type: string
+          pattern: '^\d{2}/\d{2}/\d{4}$'
+          example: '16/12/2026'
+        days:
+          type: number
+        unit:
+          type: string
+          enum: [corridos, habiles]
+        reason:
+          type: string
+        certificateUrl:
+          type: string
+          format: uri
+        status:
+          $ref: '#/components/schemas/LeaveStatus'
+        hrApproverEmail:
+          type: string
+          format: email
+        decidedAt:
+          type: string
+          format: date-time
+        rejectionReason:
+          type: string
+        cancelledAt:
+          type: string
+          format: date-time
+        cancelledBy:
+          type: string
+          format: email
+        source:
+          type: string
+          enum: [web, slack, api]
+
+    CreateLeaveRequestInput:
+      type: object
+      required: [leaveType, startDate, endDate]
+      properties:
+        leaveType:
+          $ref: '#/components/schemas/LeaveType'
+        startDate:
+          type: string
+          pattern: '^\d{2}/\d{2}/\d{4}$'
+          example: '15/12/2026'
+        endDate:
+          type: string
+          pattern: '^\d{2}/\d{2}/\d{4}$'
+          example: '16/12/2026'
+        reason:
+          type: string
+        certificateUrl:
+          type: string
+          format: uri
+          description: Obligatorio si el tipo requiere certificado (EXAMEN, ENFERMEDAD, MATERNIDAD).
+        source:
+          type: string
+          enum: [web, slack, api]
+          default: api
+        employeeEmail:
+          type: string
+          format: email
+          description: |
+            **Solo API key.** Email del empleado para crear la solicitud en su
+            nombre. Ignorado con autenticación JWT.
+
+    LeaveErrorCode:
+      type: string
+      enum:
+        - NOT_FOUND
+        - NOT_PENDING
+        - ALREADY_STARTED
+        - NOT_OWNER
+        - NOT_HR
+        - INVALID_TYPE
+        - INVALID_DATE_RANGE
+        - INVALID_DAYS
+        - MISSING_CERTIFICATE
+        - ANNUAL_CAP_EXCEEDED
+        - MISSING_BUSINESS_DAY
+        - OVERLAP
+        - EMPLOYEE_NOT_FOUND
+        - MISSING_REJECTION_REASON
+        - MISSING_CANCELLED_BY
+        - MISSING_HR_EMAIL
+
+    LeaveError:
+      type: object
+      required: [error, code]
+      properties:
+        error:
+          type: string
+        code:
+          $ref: '#/components/schemas/LeaveErrorCode'
